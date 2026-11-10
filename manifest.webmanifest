@@ -1,0 +1,9 @@
+{
+  "name": "CarOne — avto ehtiyot qismlar",
+  "short_name": "CarOne",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f5f9fe",
+  "theme_color": "#3a9ff0",
+  "icons": [{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
