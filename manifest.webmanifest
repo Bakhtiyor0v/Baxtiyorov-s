@@ -1,9 +1,15 @@
 {
   "name": "CarOne — avto ehtiyot qismlar",
   "short_name": "CarOne",
-  "start_url": "./",
+  "description": "Koreys avtomobillari uchun ehtiyot qismlar",
+  "start_url": "./#/",
+  "scope": "./",
   "display": "standalone",
-  "background_color": "#f5f9fe",
-  "theme_color": "#3a9ff0",
-  "icons": [{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+  "background_color": "#f3f7fb",
+  "theme_color": "#ffffff",
+  "lang": "uz",
+  "icons": [
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "assets/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
 }
