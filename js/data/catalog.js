@@ -122,6 +122,15 @@
     ['Gayka M10', '91796', 'M10', 'hardware', [], 'DIN', 'CN', 1000, 0, 100, '4600000091792', ''],
     ['Gaz shlangi 8 mm (1 metr)', '91786', 'GAZ-8', 'hardware', [...N, ...CB, ...DM], 'Korea', 'KR', 12000, 0, 10, '4600000091785', ''],
     ['Gaz shlangi 5 mm (1 metr)', '91787', 'GAZ-5', 'hardware', [...N, ...CB, ...DM], 'Korea', 'KR', 9000, 0, 10, '4600000091785', ''],
+    // ---- Do'kon egasi yuborgan rasmlar bilan (narxlar NAMUNAVIY) ----
+    // [.., image, { fitUnknown }] — mosligi aniq kiritilmagan: sotuvchidan so'rash taklif qilinadi
+    ['Enerzon EFB 60 Ah · CCA 550 akkumulyator', '61710', 'EFB-60AH-550', 'electric', [], 'Enerzon', 'UZ', 1150000, 0, 6, '4780000617101', 'new', null, { fitUnknown: true }],
+    ['Enerzon EFB 75 Ah · CCA 700 akkumulyator', '61711', 'EFB-75AH-700', 'electric', [], 'Enerzon', 'UZ', 1390000, 0, 4, '4780000617118', 'new', null, { fitUnknown: true }],
+    ['Gidravlik vyjimnoy podshipnik (stseplenie)', '61720', 'CSC-HYD-01', 'engine', [], 'Korea', 'KR', 690000, 0, 3, '4780000617200', '', 'assets/products/clutch-bearing.jpg', { fitUnknown: true }],
+    ['Suv pompasi (Koreya)', '61721', 'PUMP-KR-01', 'engine', [], 'Korea', 'KR', 420000, 0, 5, '4780000617217', '', 'assets/products/water-pump-kr.jpg', { fitUnknown: true }],
+    ['Suv pompasi (Xitoy)', '61722', 'PUMP-CN-01', 'engine', [], 'China', 'CN', 260000, 0, 7, '4780000617224', '', 'assets/products/water-pump-cn.jpg', { fitUnknown: true }],
+    ['Vint M 4 Sariq', '91795', 'M4-SARIQ', 'hardware', [], 'Korea', 'KR', 500, 0, 100, '4600000091795', '', 'assets/products/vint-m4-sariq.jpg'],
+    ['Bolt M 19*80', '91789', 'M19x80', 'hardware', [], 'Korea', 'KR', 6000, 0, 30, '4600000091789', '', 'assets/products/bolt-m19x80.jpg'],
   ];
 
   const products = raw.map((r, i) => ({
@@ -130,7 +139,8 @@
     price: r[7], oldPrice: r[8] || 0, stock: r[9], barcode: r[10],
     isHit: r[11] === 'hit', isNew: r[11] === 'new', unit: 'dona',
     // Rasm keyinchalik Bito'dan (images[]) keladi
-    image: null,
+    image: r[12] || null,
+    fitUnknown: !!(r[13] && r[13].fitUnknown),
   }));
 
   window.CO = window.CO || {};

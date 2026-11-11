@@ -153,8 +153,16 @@
   }
 
   // Kamera natijasi uchun: kod bo'yicha kuchli moslik + so'zlar bo'yicha o'xshashlar
-  function matchScan({ codes = [], words = [] }) {
+  function matchScan({ codes = [], words = [], specs = [] }) {
     const strong = new Map();
+    // Yorliqdagi xususiyatlar (60Ah, CCA 550) — hammasi nomda bo'lsa, aniq moslik
+    if (specs.length) {
+      index.forEach((e) => {
+        const hay = compact(e.p.name + ' ' + e.p.oem);
+        const hits = specs.filter((sp) => hay.includes(sp)).length;
+        if (hits === specs.length || hits >= 2) strong.set(e.p.id, e.p);
+      });
+    }
     for (const c of codes) {
       const cc = compact(c);
       if (cc.length < 5) continue;

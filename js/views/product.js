@@ -10,6 +10,7 @@
 
   function fitBox(p) {
     const car = CO.store.state.activeCar;
+    if (p.fitUnknown) return `<div class="fitbox fitbox--ask">${I.info}<div><b>${t('fit.unknown')}</b>${t('fit.unknown.text')}</div></div>`;
     if (!p.cars.length) return `<div class="fitbox fitbox--yes">${I.check}<div><b>${t('fit.universal')}</b>${t('fit.universal.text')}</div></div>`;
     if (!car) return `<div class="fitbox fitbox--ask">${I.car}<div><b>${t('fit.ask')}</b>${t('fit.ask.text')}</div><button class="btn btn--sm" data-garage>${t('garage.pickShort')}</button></div>`;
     if (p.cars.includes(car)) return `<div class="fitbox fitbox--yes">${I.check}<div><b>${t('fit.yes', { car: esc(car) })}</b>${t('fit.yes.text')}</div></div>`;
@@ -73,7 +74,7 @@
 
             <div class="card-box">
               <h2 class="card-box__title">${t('product.fitsCars')}</h2>
-              ${p.cars.length
+              ${p.fitUnknown ? `<p class="muted" style="margin:0">${t('fit.unknown.text')}</p>` : p.cars.length
                 ? `<div class="chips chips--wrap">${p.cars.map((c) => `<a class="chip chip--sm ${c === CO.store.state.activeCar ? 'is-active' : ''}" href="#/catalog?car=${encodeURIComponent(c)}">${esc(c)}</a>`).join('')}</div>`
                 : `<p class="muted" style="margin:0">${t('fit.universal.text')}</p>`}
             </div>

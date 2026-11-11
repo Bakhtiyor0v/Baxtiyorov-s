@@ -60,7 +60,7 @@
             </div>
             <label class="btn btn--sm ${c[p.id] ? 'btn--ghost' : ''}" style="align-self:center">
               ${I.camera}${c[p.id] ? c[p.id] + ' ✓' : 'Rasm'}
-              <input type="file" accept="image/*" capture="environment" multiple data-photo="${p.id}" hidden>
+              <input type="file" accept="image/*" multiple data-photo="${p.id}" hidden>
             </label>
           </div>`).join('')}
       </div>

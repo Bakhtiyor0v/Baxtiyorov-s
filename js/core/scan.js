@@ -229,7 +229,11 @@
       .map((w) => w.toLowerCase())
       .filter((w, i, a) => a.indexOf(w) === i && !STOP.has(w))
       .slice(0, 14);
-    return { codes: [...codes].slice(0, 12), words };
+    // Akkumulyator va shu kabilar: "60Ah", "CCA 550" — nom bo'yicha aniq solishtirish uchun
+    const specs = new Set();
+    (clean.match(/\b(\d{2,3})\s?A\s?[hH]\b/g) || []).forEach((m) => specs.add(m.replace(/\D/g, '') + 'ah'));
+    (clean.match(/\bCCA\s?:?\s?(\d{3,4})\b/gi) || []).forEach((m) => specs.add('cca' + m.replace(/\D/g, '')));
+    return { codes: [...codes].slice(0, 12), words, specs: [...specs] };
   }
 
   async function analyze(source, { crop, isGood, skipBarcode = false, onStatus = () => {}, onProgress = () => {} } = {}) {
