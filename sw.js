@@ -1,9 +1,9 @@
 /* Offline kesh: sayt sekin internetda ham tez ochiladi. Versiyani o'zgartirsangiz kesh yangilanadi. */
-const CACHE = 'carone-v2';
+const CACHE = 'carone-v3';
 const ASSETS = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css', 'assets/icon.svg',
   'js/core/config.js', 'js/core/store.js', 'js/core/i18n.js', 'js/data/catalog.js', 'integrations/bito/mapping.js',
-  'js/core/api.js', 'js/core/search.js', 'js/core/scan.js', 'js/ui/icons.js', 'js/ui/components.js',
+  'js/core/api.js', 'js/core/search.js', 'js/core/scan.js', 'js/core/vision.js', 'js/views/admin.js', 'js/ui/icons.js', 'js/ui/components.js',
   'js/views/listing.js', 'js/views/home.js', 'js/views/catalog.js', 'js/views/product.js', 'js/views/scan.js',
   'js/views/cart.js', 'js/views/account.js', 'js/app.js',
 ];

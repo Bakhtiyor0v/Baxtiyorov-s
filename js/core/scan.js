@@ -232,10 +232,10 @@
     return { codes: [...codes].slice(0, 12), words };
   }
 
-  async function analyze(source, { crop, isGood, onStatus = () => {}, onProgress = () => {} } = {}) {
+  async function analyze(source, { crop, isGood, skipBarcode = false, onStatus = () => {}, onProgress = () => {} } = {}) {
     const result = { barcode: null, codes: [], words: [], text: '' };
 
-    const det = await getDetector();
+    const det = skipBarcode ? null : await getDetector();
     if (det) {
       onStatus('barcode');
       try {

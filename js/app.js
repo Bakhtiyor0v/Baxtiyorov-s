@@ -13,7 +13,7 @@
   const ROUTES = {
     '': 'home', catalog: 'catalog', search: 'search', p: 'product', scan: 'scan',
     cart: 'cart', checkout: 'checkout', order: 'order', account: 'account',
-    orders: 'orders', favorites: 'favorites', garage: 'garage',
+    orders: 'orders', favorites: 'favorites', garage: 'garage', admin: 'admin',
   };
   let cleanup = null;
   const scrollMem = new Map();

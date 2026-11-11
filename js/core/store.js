@@ -18,6 +18,7 @@
     history: read('history', []),    // qidiruv so'rovlari
     recent: read('recent', []),      // ko'rilgan mahsulotlar
     addresses: read('addresses', []),
+    visual: read('visual', []),       // do'kon egasi qo'shgan mahsulot rasmlari (vektor ko'rinishida)
   };
 
   const listeners = {};

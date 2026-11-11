@@ -73,6 +73,7 @@
         <a class="menu__item" href="#/favorites">${I.heart}<span>${t('fav.title')}</span><small>${st.favs.length || ''}</small>${I.chevron}</a>
       </div>
       ${langMenu()}
+      <div class="menu"><a class="menu__item" href="#/admin">${I.camera}<span>${t('acc.owner')}</span><small>${t('acc.owner.sub')}</small>${I.chevron}</a></div>
       <h2 class="section__title" style="font-size:16px;margin:22px 0 0">${t('acc.contacts')}</h2>
       ${contacts()}
       ${u ? `<div class="menu"><button class="menu__item menu__item--danger" data-logout>${I.logout}<span>${t('acc.logout')}</span></button></div>` : ''}
