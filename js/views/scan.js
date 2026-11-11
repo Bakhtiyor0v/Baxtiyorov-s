@@ -122,8 +122,9 @@
       /* ---------- Natija: mahsulotning o'zi (vizual) ---------- */
       function showProductResult(r) {
         const products = CO.api.products();
-        const visStrong = r.visual.filter((v) => v.score >= CO.vision.THRESH.strong).map((v) => CO.api.product(v.id)).filter(Boolean);
-        const visMaybe = r.visual.filter((v) => v.score >= CO.vision.THRESH.maybe && v.score < CO.vision.THRESH.strong).map((v) => CO.api.product(v.id)).filter(Boolean);
+        const pk = CO.vision.pick(r.visual);
+        const visStrong = pk.strong.map((id) => CO.api.product(id)).filter(Boolean);
+        const visMaybe = pk.maybe.map((id) => CO.api.product(id)).filter(Boolean);
         const types = r.types.filter((x) => x.score >= 0.04).slice(0, 3);
         // Vizual moslik bo'lsa, kategoriya o'shandan olinadi
         let cat = visStrong[0]?.cat || visMaybe[0]?.cat || types[0]?.cat || null;
@@ -239,7 +240,7 @@
         const r = await CO.vision.recognize(source, { crop });
         // 3) Qutida bo'lsa yoki aniq emas bo'lsa — yozuvini ham o'qib ko'ramiz
         r.exact = [];
-        const confident = r.visual.some((v) => v.score >= CO.vision.THRESH.strong);
+        const confident = CO.vision.pick(r.visual).strong.length > 0;
         if (!confident) {
           try {
             const txt = await CO.scan.analyze(source, {

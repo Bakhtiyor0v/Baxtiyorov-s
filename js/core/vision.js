@@ -187,8 +187,27 @@
   }
 
   // Do'kon egasi: mahsulotga rasm qo'shish
+  /*
+   * Natijani baholash: faqat mutlaq ball emas, birinchi va keyingilar orasidagi farq ham.
+   * Telefon suratida (stol, soya, xira) ball pasayadi, lekin to'g'ri mahsulot baribir birinchi turadi.
+   * Bir xil ko'rinadigan mahsulotlar (masalan, Koreya va Xitoy nusxasi) birga ko'rsatiladi.
+   */
+  function pick(visual) {
+    if (!visual.length) return { strong: [], maybe: [] };
+    const top = visual[0].score;
+    const near = visual.filter((v) => top - v.score <= 0.03);           // deyarli bir xil — hammasi
+    const second = visual.find((v) => top - v.score > 0.03)?.score ?? 0;
+    const clear = top >= 0.8 || (top >= 0.45 && top - second >= 0.07);
+    if (clear) return { strong: near.map((v) => v.id), maybe: visual.filter((v) => !near.includes(v) && v.score >= top - 0.12).slice(0, 4).map((v) => v.id) };
+    if (top >= 0.45) return { strong: [], maybe: visual.filter((v) => v.score >= top - 0.1).slice(0, 6).map((v) => v.id) };
+    return { strong: [], maybe: [] };
+  }
+
+  // Do'kon rasmlaridagi yozuv/logotip qismini tashlab, faqat mahsulot qismini olish
+  const refCrop = () => (window.CO.config.vision && window.CO.config.vision.refCrop) || null;
+
   async function addReference(productId, source) {
-    const { embedding } = await embedAndClassify(source, null);
+    const { embedding } = await embedAndClassify(source, refCrop());
     const list = [...(window.CO.store.state.visual || []), { id: productId, v: encode(embedding), t: Date.now() }];
     window.CO.store.set('visual', list);
     resetIndex();
@@ -201,5 +220,5 @@
   }
 
   window.CO = window.CO || {};
-  window.CO.vision = { load, recognize, addReference, exportIndex, loadIndex, resetIndex, encode, decode, typeScores, MODEL_ID, THRESH: { strong: 0.82, maybe: 0.7 } };
+  window.CO.vision = { load, recognize, pick, refCrop, addReference, exportIndex, loadIndex, resetIndex, encode, decode, typeScores, MODEL_ID, THRESH: { strong: 0.82, maybe: 0.7 } };
 })();

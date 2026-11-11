@@ -29,4 +29,10 @@ window.CO.config = {
   },
 
   defaultLang: 'uz',
+
+  // Rasm orqali tanish: do'kon rasmlari shablonida tepada "CarOne" yozuvi, pastda nom bor —
+  // bazaga faqat o'rtadagi mahsulot qismi olinadi (nisbiy koordinatalar 0..1)
+  vision: {
+    refCrop: { x: 0.1, y: 0.16, w: 0.8, h: 0.7 },
+  },
 };
