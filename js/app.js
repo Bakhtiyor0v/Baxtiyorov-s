@@ -96,7 +96,7 @@
     headerEl.hidden = false;
     if (spec === 'main') {
       const car = CO.store.state.activeCar;
-      headerEl.className = 'header';
+      headerEl.className = 'header header--brand';
       headerEl.innerHTML = `
         <div class="header__inner">
           <div class="header__row">

@@ -8,7 +8,7 @@
  */
 (function () {
   const categories = [
-    { id: 'filter', name: { uz: 'Filtrlar', ru: 'Фильтры' }, icon: 'filter', color: '#3a9ff0' },
+    { id: 'filter', name: { uz: 'Filtrlar', ru: 'Фильтры' }, icon: 'filter', color: '#3478f4' },
     { id: 'oil', name: { uz: 'Moy va suyuqliklar', ru: 'Масла и жидкости' }, icon: 'oil', color: '#f0a33a' },
     { id: 'brake', name: { uz: 'Tormoz tizimi', ru: 'Тормозная система' }, icon: 'brake', color: '#e5484d' },
     { id: 'engine', name: { uz: 'Dvigatel', ru: 'Двигатель' }, icon: 'engine', color: '#6b7bf0' },

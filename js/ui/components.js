@@ -18,7 +18,7 @@
   }
   function catStyle(catId) {
     const c = CO.api.category(catId);
-    const color = c?.color || '#3a9ff0';
+    const color = c?.color || '#3478f4';
     return `--cat-color:${color};--tint:${hexTint(color)}`;
   }
 
