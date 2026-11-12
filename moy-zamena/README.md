@@ -3,9 +3,19 @@
 Do'kon kompyuterida ishlaydigan kichik server + planshet va kassa uchun brauzer ilovasi.
 Internet shart emas — planshet va kompyuter **bir Wi-Fi** tarmog'ida bo'lsa yetarli.
 
-## Serversiz sinab ko'rish (demo)
-`static/demo.html` faylini brauzerda oching (ikki marta bosish kifoya) — planshet qismi serversiz ishlaydi,
-ma'lumotlar faqat shu brauzerda saqlanadi. «Boshidan boshlash» tugmasi demo ma'lumotlarini tozalaydi.
+## Telefon / planshetga ilova qilib o'rnatish
+`static/app.html` — o'rnatiladigan ilova (PWA). Hozircha **demo rejimda**: serversiz ishlaydi, ma'lumotlar shu qurilmada.
+
+1. **Bir marta:** GitHub → repo → **Settings → Pages** → *Source: Deploy from a branch* →
+   branch `claude/moy-almashtiruvi-tizim-o7rrie`, papka `/ (root)` → **Save**. 1–2 daqiqada sayt chiqadi.
+2. Telefonda oching: **https://bakhtiyor0v.github.io/Baxtiyorov-s/zamena/**
+3. **Android (Chrome):** «📲 O'rnatish» tugmasi yoki ⋮ → «Установить приложение».
+   **iPhone (Safari):** Ulashish ⬆ → «На экран „Домой“».
+
+**Yangilanish avtomatik:** o'zgarish GitHub'ga push qilingach, ilova keyingi ochilishda (internet bo'lsa)
+yangi versiyani o'zi oladi. Qayta o'rnatish shart emas. Internet bo'lmasa oxirgi versiya ochiladi.
+
+Kompyuterda serversiz sinash: `static/app.html` ni ikki marta bosib oching.
 
 ## Ishga tushirish
 1. Kompyuterga [Python 3](https://www.python.org/downloads/) o'rnating (o'rnatishda **"Add Python to PATH"** belgilang).

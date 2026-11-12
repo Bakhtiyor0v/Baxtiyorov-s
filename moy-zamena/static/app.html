@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#3478F4">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Zamena">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Zamena</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="app.css">
+<style>
+.top{top:env(safe-area-inset-top,0px)}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:#3478F4}
+body{padding-bottom:env(safe-area-inset-bottom,0px)}
+.demo-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#fff4e0;color:#7a4b00;padding:6px max(16px,env(safe-area-inset-left,0px));font-size:14px}
+.demo-bar span{flex:1;min-width:0}
+.demo-bar button{border:0;border-radius:8px;background:#fff;color:#7a4b00;font-weight:600;padding:8px 12px;cursor:pointer;font-size:14px}
+.demo-bar button.inst{background:#3478F4;color:#fff}
+</style>
+</head>
+<body>
+<div class="demo-bar"><b>DEMO</b><span>ma'lumotlar faqat shu qurilmada</span>
+  <button id="install" class="inst" type="button" hidden>📲 O'rnatish</button>
+  <button id="demo-reset" type="button">Tozalash</button></div>
+<header class="top">
+  <div class="brand" id="brand">Moy almashtirish</div>
+  <nav class="tabs" id="tabs"></nav>
+  <div class="top-right"><span id="clock"></span><span id="net" class="dot" title="Aloqa"></span></div>
+</header>
+<main id="app"><div class="loading">Yuklanmoqda…</div></main>
+<div id="modal-root"></div>
+<div id="toast"></div>
+<script>window.DEMO_MODE = 'planshet';</script>
+<script src="demo.js"></script>
+<script src="app.js"></script>
+<script>
+(function () {
+  document.getElementById('demo-reset').onclick = function () {
+    confirmBox('Demo ma\'lumotlari o\'chirilib, boshidan boshlansinmi?').then(function (ok) { if (ok) window.DEMO_RESET(); });
+  };
+  // Oflayn ishlash va avtomatik yangilanish
+  if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+    navigator.serviceWorker.register('sw.js').catch(function () { });
+  }
+  // Telefonga o'rnatish tugmasi
+  var standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone;
+  var btn = document.getElementById('install'), deferred = null;
+  var ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (standalone) return;
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferred = e; btn.hidden = false; });
+  window.addEventListener('appinstalled', function () { btn.hidden = true; toast("Ilova o'rnatildi"); });
+  if (ios) btn.hidden = false;
+  btn.onclick = function () {
+    if (deferred) { deferred.prompt(); deferred.userChoice.then(function () { deferred = null; btn.hidden = true; }); return; }
+    modal("Telefonga o'rnatish", ios
+      ? '<ol style="font-size:18px;line-height:1.7;padding-left:22px"><li><b>Safari</b> brauzerida oching</li><li>Pastdagi <b>Ulashish</b> tugmasini bosing (kvadrat va ⬆ strelka)</li><li><b>«На экран „Домой“» / «Add to Home Screen»</b> ni tanlang</li><li><b>Qo\'shish</b> ni bosing — ekranda «Zamena» belgisi paydo bo\'ladi</li></ol>'
+      : '<ol style="font-size:18px;line-height:1.7;padding-left:22px"><li><b>Chrome</b> brauzerida oching</li><li>Tepadagi <b>⋮</b> menyuni bosing</li><li><b>«Установить приложение» / «Install app»</b> (yoki «Добавить на главный экран») ni tanlang</li></ol>');
+  };
+})();
+</script>
+</body>
+</html>

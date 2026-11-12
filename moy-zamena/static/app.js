@@ -260,7 +260,8 @@ function sellerBadge() {
   const e = emp(LS.get('seller', null));
   let b = $('#who');
   if (!b) { b = document.createElement('button'); b.id = 'who'; b.className = 'who'; $('.top-right').prepend(b); b.onclick = () => chooseSeller(true); }
-  b.textContent = e ? '👤 ' + e.name : '👤 Kim ishlayapti?';
+  b.innerHTML = `<span>👤</span><span class="who-n">${esc(e ? e.name : 'Kim ishlayapti?')}</span>`;
+  b.title = e ? e.name : 'Kim ishlayapti?';
 }
 function chooseSeller(force) {
   const list = employees('sotuvchi');
