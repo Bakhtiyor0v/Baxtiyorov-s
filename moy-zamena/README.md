@@ -3,6 +3,10 @@
 Do'kon kompyuterida ishlaydigan kichik server + planshet va kassa uchun brauzer ilovasi.
 Internet shart emas — planshet va kompyuter **bir Wi-Fi** tarmog'ida bo'lsa yetarli.
 
+## Serversiz sinab ko'rish (demo)
+`static/demo.html` faylini brauzerda oching (ikki marta bosish kifoya) — planshet qismi serversiz ishlaydi,
+ma'lumotlar faqat shu brauzerda saqlanadi. «Boshidan boshlash» tugmasi demo ma'lumotlarini tozalaydi.
+
 ## Ishga tushirish
 1. Kompyuterga [Python 3](https://www.python.org/downloads/) o'rnating (o'rnatishda **"Add Python to PATH"** belgilang).
 2. `ishga-tushirish.bat` ni ikki marta bosing (Linux/Mac: `python3 server.py`).

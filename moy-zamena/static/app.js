@@ -42,6 +42,7 @@ function toast(msg, err) {
 }
 
 async function api(method, path, body) {
+  if (window.DEMO_API) { try { const r = await window.DEMO_API(method, path, body); setNet(true); return r; } catch (e) { throw e; } }
   const headers = { 'Content-Type': 'application/json' };
   const pin = sessionStorage.getItem('zm_pin'); if (pin) headers['X-Pin'] = pin;
   let res;
@@ -163,7 +164,7 @@ const orderLine = o => o.items.map(i => `${esc(i.name)} ×${qtyFmt(i.qty)}${i.is
 // ------------------------------------------------------------------ ishga tushirish
 async function start() {
   const path = location.pathname.replace(/\/$/, '');
-  S.mode = path.endsWith('/planshet') ? 'planshet' : path.endsWith('/kassa') ? 'kassa' : null;
+  S.mode = window.DEMO_MODE || (path.endsWith('/planshet') ? 'planshet' : path.endsWith('/kassa') ? 'kassa' : null);
   setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); }, 1000);
   try { await reloadBoot(); } catch (e) { $('#app').innerHTML = `<div class="card empty">${esc(e.message)}</div>`; return; }
   document.title = S.boot.settings.shop_name;
