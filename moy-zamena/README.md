@@ -15,11 +15,17 @@ Ma'lumotlar `data/zamena.db` faylida. **Zaxira nusxa** — shu faylni vaqti-vaqt
 ## Jarayon
 | Kim | Qayerda | Nima qiladi |
 |---|---|---|
-| Zamena sotuvchisi | Planshet | Raqamni kiritadi → bazada bo'lmasa model/ism/telefon bilan qo'shiladi → mijoz tanlagan moy, probeg, **usta (majburiy)**, quyilgan va to'kib olingan litr, nimalar almashtirilgani → **«Almashtirilmoqda»** |
+| Zamena sotuvchisi | Planshet | **Mijoz kiritish** → raqam katta ekran klaviaturasida (`75 400 NAA`, `01 A 123 BC`) → bazada bo'lmasa: mashina nomi, **A/T yoki M/T**, rangi, **telefon (majburiy)** `+998 88 226 15 00`, ismi → probeg, **usta (majburiy)**, moy + litr, filtrlar → **«Almashtirilmoqda»** |
 | Kassir | Do'kon PC → Navbat | Mashina darhol navbatda chiqadi (ovoz bilan). Summani aytadi, kerak bo'lsa mahsulot qo'shadi/bonus qiladi, chegirma, keshbekdan to'lash, naqd/karta → **To'landi** |
 | Rahbar | PC → Hisobot / Oylik | Foyda, KPI, oylik, inventarizatsiya |
 
-Planshet bosh sahifasida: bugun nechta mashina, quyilgan litr, **ustalar reytingi** (bugun va shu oy).
+Planshetda faqat 2 bo'lim bor: **Mijoz kiritish** va **Bugungi tarix**. Mijoz (telefon) kiritilmasa zamena qilib bo'lmaydi.
+Kim ishlayotgani (zamena sotuvchisi) planshetda bir marta tanlanadi va eslab qolinadi.
+
+### Filtrlar mashinaga qarab
+- Kassa → Ombor → filtrni oching → **Turi** (moy / havo / salon / yoqilg'i) va **qaysi mashinalarga mos**ligini belgilang.
+- Planshetda «Moy filtri» tugmasi bosilganda shu mashinaga mos filtr avtomatik qo'shiladi. 3 marta bosilsa — 3 ta.
+- Mos filtr belgilanmagan mashina (masalan, xitoy mashinalari — o'zimizning filtrni kesib qo'yamiz): sotuvchi istalgan filtrni tanlaydi, «keyingi safar avtomatik qo'shilsin» belgisi bilan tizim uni shu model uchun eslab qoladi.
 
 ## Pul hisobi
 - **Xizmat haqi** odatda 0 — foyda mahsulotdan.

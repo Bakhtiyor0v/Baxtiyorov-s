@@ -13,11 +13,23 @@ const today = () => new Date().toISOString().slice(0, 10);
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const timeOf = s => s ? s.slice(11, 16) : '';
 const dateOf = s => s ? s.slice(0, 10).split('-').reverse().join('.') : '';
-const plateFmt = p => esc(p || '');
+// Raqam: 75400NAA → «75 400 NAA», 01A123BC → «01 A 123 BC»
+const plateClean = p => String(p || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+const plateFmt = p => { const c = plateClean(p); return c.length <= 2 ? c : [c.slice(0, 2), ...(c.slice(2).match(/\d+|[A-Z]+/g) || [])].join(' '); };
+const plateValid = p => /^\d{2}([A-Z]\d{3}[A-Z]{2}|\d{3}[A-Z]{3})$/.test(plateClean(p));
+// Telefon: 882261500 → «88 226 15 00» (+998 alohida)
+const phoneFmt = p => { let d = String(p || '').replace(/\D/g, ''); if (d.length > 9 && d.startsWith('998')) d = d.slice(3); d = d.slice(0, 9); return [d.slice(0, 2), d.slice(2, 5), d.slice(5, 7), d.slice(7, 9)].filter(Boolean).join(' '); };
+const phoneShow = p => p ? '+998 ' + phoneFmt(p) : '—';
+const TRANS = { AT: 'A/T', MT: 'M/T' };
+const COLORS = [['Oq', '#ffffff'], ['Qora', '#111111'], ['Kumush', '#c3c7cd'], ['Mokriy asfalt', '#4b5059'], ['Kulrang', '#8b9099'], ["Ko'k", '#2f6fde'],
+  ["To'q ko'k", '#1c2f66'], ['Qizil', '#d22f2f'], ['Olcha', '#7a1830'], ['Yashil', '#2e8b57'], ['Bej', '#d9c7a3'], ['Jigarrang', '#6b4a2f'], ['Sariq', '#f2c230'], ['Boshqa', 'conic-gradient(#f55,#fd5,#5d5,#5af,#a5f,#f55)']];
+const colorDot = n => { if (!n) return ''; const c = COLORS.find(x => x[0] === n); return `<span class="cdot" style="background:${c ? c[1] : '#ccc'}"></span>${esc(n)}`; };
+const FILTERS = [['moy', 'Moy filtri'], ['havo', 'Havo filtri'], ['salon', 'Salon filtri'], ['yoqilgi', "Yoqilg'i filtri"]];
+const KINDS = { moy: [['motor', 'Motor moyi'], ['karobka', 'Karobka moyi']], filtr: FILTERS, boshqa: [], xizmat: [] };
+const carDesc = o => [esc(o.model || ''), o.transmission ? TRANS[o.transmission] : '', colorDot(o.color)].filter(Boolean).join(' ');
 const CATS = { moy: 'Moy', filtr: 'Filtr', boshqa: 'Boshqa', xizmat: 'Xizmat' };
 const ROLES = { usta: 'Usta', sotuvchi: 'Zamena sotuvchisi', kassir: 'Kassir' };
 const STATUS = { jarayonda: 'Almashtirilmoqda', tayyor: 'Tayyor', yopilgan: "To'langan", bekor: 'Bekor' };
-const SERVICES = ['Motor moyi', 'Moy filtri', 'Havo filtri', 'Salon filtri', "Yoqilg'i filtri", 'Karobka moyi', 'Antifriz', 'Tormoz suyuqligi', 'Gidrouchitel moyi', 'Svecha'];
 const LS = {
   get(k, d) { try { const v = localStorage.getItem('zm_' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('zm_' + k, JSON.stringify(v)); } catch { } },
@@ -156,10 +168,12 @@ async function start() {
   try { await reloadBoot(); } catch (e) { $('#app').innerHTML = `<div class="card empty">${esc(e.message)}</div>`; return; }
   document.title = S.boot.settings.shop_name;
   $('#brand').textContent = S.boot.settings.shop_name;
-  $('#brand').onclick = () => S.mode ? go(S.mode === 'planshet' ? 'home' : 'navbat') : null;
+  $('#brand').onclick = () => S.mode ? go(S.mode === 'planshet' ? 'kiritish' : 'navbat') : null;
   if (!S.mode) return chooser();
+  document.body.classList.add(S.mode === 'planshet' ? 'pl' : 'ks');
   buildTabs();
-  go(S.mode === 'planshet' ? 'home' : 'navbat');
+  sellerBadge();
+  go(S.mode === 'planshet' ? 'kiritish' : 'navbat');
   setInterval(poll, 3000);
 }
 
@@ -171,7 +185,7 @@ function chooser() {
 }
 
 const TABS = {
-  planshet: [['home', 'Bosh sahifa'], ['bugun', 'Bugungi ishlar']],
+  planshet: [['kiritish', '＋ Mijoz kiritish'], ['bugun', 'Bugungi tarix']],
   kassa: [['navbat', 'Navbat'], ['sotuv', 'Sotuv'], ['tarix', 'Tarix'], ['mahsulot', 'Ombor'], ['mijoz', 'Mijozlar'],
     ['inventar', 'Inventarizatsiya'], ['hisobot', 'Hisobot', 1], ['oylik', 'Oylik / KPI', 1], ['xodim', 'Xodimlar', 1], ['sozlama', 'Sozlamalar', 1]],
 };
@@ -202,6 +216,8 @@ async function go(tab, ctx) {
 async function render() {
   const v = VIEWS[S.tab];
   $('#app').oninput = null;
+  KEYH = null;
+  window.scrollTo(0, 0);
   try { await v(); } catch (e) { $('#app').innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
 }
 
@@ -214,11 +230,11 @@ async function poll() {
       const active = document.activeElement;
       const typing = active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) && active.value;
       if (!S.editing && !typing && !S.ctx.form && LIVE.has(S.tab)) render();
-      updateBadges();
+      updateBadges(); sellerBadge();
     }
   } catch { }
 }
-const LIVE = new Set(['home', 'bugun', 'navbat', 'tarix', 'mahsulot']);
+const LIVE = new Set(['bugun', 'navbat', 'tarix', 'mahsulot']);
 async function updateBadges() {
   if (S.mode !== 'kassa') return;
   try {
@@ -228,180 +244,315 @@ async function updateBadges() {
 }
 
 // ================================================================== PLANSHET
+// Planshet: faqat 2 ta bo'lim — «Mijoz kiritish» va «Bugungi tarix». Tugmalar katta.
 const VIEWS = {};
+const PLATE_KEYS = ['1234567890', 'QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
+const LITERS = [3, 3.5, 4, 4.5, 5, 6];
+let KEYH = null; // hozirgi ekranning klaviatura (fizik) ishlovchisi
+document.addEventListener('keydown', e => {
+  const a = document.activeElement;
+  if (KEYH && !S.editing && !(a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName))) KEYH(e);
+});
 
-VIEWS.home = async () => {
-  const t = await GET('today');
-  const max = Math.max(1, ...t.by_master.map(x => x.n));
-  const maxM = Math.max(1, ...t.by_master_month.map(x => x.n));
-  const open = t.orders.filter(o => o.status === 'jarayonda');
-  $('#app').innerHTML = `<div class="pl-shell">
-    <div class="card"><h3>Mashina raqami</h3>
-      <form id="pf" class="row"><input id="plate" class="plate sp" placeholder="01 A 123 BC" autocomplete="off" autocapitalize="characters">
-      <button class="btn p lg">Qidirish</button></form></div>
-    <div class="grid g3">
-      <div class="card stat"><div class="label">Bugun moy almashtirildi</div><div class="big">${t.count} ta</div></div>
-      <div class="card stat"><div class="label">Bugun quyilgan moy</div><div class="big">${qtyFmt(t.oil)} L</div></div>
-      <div class="card stat"><div class="label">Hozir almashtirilmoqda</div><div class="big">${open.length} ta</div></div>
-    </div>
-    <div class="grid g2">
-      <div class="card"><h3>Bugun: ustalar reytingi</h3>${t.by_master.length ? t.by_master.map((m, i) => `
-        <div class="rank ${i === 0 ? 'first' : ''}"><span class="n">${i + 1}</span><div class="sp"><b>${esc(m.name || '—')}</b>
-        <div class="bar"><i style="width:${m.n / max * 100}%"></i></div></div><b>${m.n} ta</b><span class="muted small">${qtyFmt(m.oil)} L</span></div>`).join('') : '<div class="empty">Hali yo\'q</div>'}</div>
-      <div class="card"><h3>Shu oy: ustalar</h3>${t.by_master_month.length ? t.by_master_month.map((m, i) => `
-        <div class="rank ${i === 0 ? 'first' : ''}"><span class="n">${i + 1}</span><div class="sp"><b>${esc(m.name || '—')}</b>
-        <div class="bar"><i style="width:${m.n / maxM * 100}%"></i></div></div><b>${m.n} ta</b></div>`).join('') : '<div class="empty">Hali yo\'q</div>'}</div>
-    </div>
-    <div class="card"><h3>Almashtirilmoqda</h3>${ordersList(open)}</div></div>`;
-  $('#pf').onsubmit = safe(async e => { e.preventDefault(); const p = $('#plate').value.trim(); if (p) go('car', { plate: p }); });
-  bindOrdersList();
-  focusLater($('#plate'));
-};
-
-function ordersList(list) {
-  if (!list.length) return '<div class="empty">Yo\'q</div>';
-  return `<div class="tbl-wrap"><table><thead><tr><th>Vaqt</th><th>Raqam</th><th>Usta</th><th>Nima qilindi</th><th>Probeg</th><th>Holat</th><th></th></tr></thead><tbody>
-    ${list.map(o => `<tr><td>${timeOf(o.created_at)}</td><td><b>${plateFmt(o.plate)}</b><div class="muted small">${esc(o.model || '')}</div></td>
-      <td>${esc(o.master_name || '—')}</td><td class="small">${orderLine(o)}</td><td class="num">${km(o.mileage)}</td>
-      <td><span class="tag ${o.status}">${STATUS[o.status]}</span></td>
-      <td class="num">${o.status === 'jarayonda' ? `<button class="btn sm ok" data-ready="${o.id}">Tayyor</button> ` : ''}
-      ${['jarayonda', 'tayyor'].includes(o.status) ? `<button class="btn sm" data-edit="${o.id}">Tahrir</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+function sellerBadge() {
+  if (S.mode !== 'planshet') return;
+  const e = emp(LS.get('seller', null));
+  let b = $('#who');
+  if (!b) { b = document.createElement('button'); b.id = 'who'; b.className = 'who'; $('.top-right').prepend(b); b.onclick = () => chooseSeller(true); }
+  b.textContent = e ? '👤 ' + e.name : '👤 Kim ishlayapti?';
 }
-function bindOrdersList() {
-  $$('[data-ready]').forEach(b => b.onclick = safe(async () => { await PUT('orders/' + b.dataset.ready, { status: 'tayyor' }); toast('Tayyor — kassaga bildirildi'); render(); }));
-  $$('[data-edit]').forEach(b => b.onclick = safe(async () => { const o = await GET('orders/' + b.dataset.edit); const car = await GET('cars/' + o.car_id); go('order', { car, order: o, form: true }); }));
+function chooseSeller(force) {
+  const list = employees('sotuvchi');
+  if (!list.length || (!force && list.some(e => e.id == LS.get('seller', null)))) return;
+  const m = modal('Kim ishlayapti?', `<div class="tiles">${list.map(e => `<button class="tile xl" data-id="${e.id}">${esc(e.name)}</button>`).join('')}</div>`);
+  m.el.onclick = e => { const b = e.target.closest('[data-id]'); if (!b) return; LS.set('seller', +b.dataset.id); m.close(); sellerBadge(); };
 }
 
-VIEWS.bugun = async () => {
-  const t = await GET('today');
-  $('#app').innerHTML = `<div class="card"><h3>Bugun (${dateOf(t.date)}): ${t.count} ta mashina, ${qtyFmt(t.oil)} L moy</h3>${ordersList(t.orders)}</div>`;
-  bindOrdersList();
+function plateBox(p, cls = '') {
+  return `<div class="plate-box ${cls}"><span class="flag">UZ</span><span class="plate-disp ${p ? '' : 'ph'}">${p ? plateFmt(p) : '01 A 123 BC'}</span></div>`;
+}
+// Tepada: mashina nomi va raqami alohida-alohida
+function carHeader(c) {
+  return `<div class="card"><div class="grid g2 hdr">
+    <div><div class="lbl">Mashina</div><div class="big2">${esc(c.model || '—')} ${c.transmission ? `<span class="tr">${TRANS[c.transmission]}</span>` : ''}</div>
+      <div class="muted">${colorDot(c.color) || 'rangi kiritilmagan'}</div></div>
+    <div><div class="lbl">Raqami</div>${plateBox(c.plate, 'sm')}</div>
+    <div><div class="lbl">Mijoz telefoni</div><div class="big2">${c.customer_phone ? phoneShow(c.customer_phone) : '<span class="neg">kiritilmagan</span>'}</div></div>
+    <div><div class="lbl">Ismi</div><div class="big2">${esc(c.customer_name || '—')}</div></div>
+  </div></div>`;
+}
+
+// 1-qadam: mashina raqami (katta ekran klaviaturasi)
+VIEWS.kiritish = async () => {
+  chooseSeller(false);
+  let plate = S.ctx.plate || '';
+  $('#app').innerHTML = `<div class="pl-shell"><div class="card">
+    <div class="lbl">Mashina raqami</div>
+    <div class="plate-box"><span class="flag">UZ</span><span id="pd" class="plate-disp"></span><span id="pok" class="plate-ok"></span></div>
+    <div class="kbd" id="kbd">${PLATE_KEYS.map(r => `<div class="krow">${[...r].map(k => `<button class="key" data-k="${k}">${k}</button>`).join('')}</div>`).join('')}
+      <div class="krow"><button class="key wide" data-k="CLR">Tozalash</button><button class="key wide" data-k="BS">⌫ O'chirish</button></div></div>
+    <button class="btn p xl" id="go" style="width:100%">Davom etish →</button></div></div>`;
+  const draw = () => {
+    const pd = $('#pd'); pd.textContent = plate ? plateFmt(plate) : '01 A 123 BC'; pd.classList.toggle('ph', !plate);
+    $('#pok').textContent = plateValid(plate) ? '✓' : '';
+    $('#go').disabled = plateClean(plate).length < 4;
+    S.ctx.plate = plate;
+  };
+  const press = k => {
+    if (k === 'CLR') plate = ''; else if (k === 'BS') plate = plate.slice(0, -1);
+    else if (plateClean(plate).length < 10) plate += k;
+    draw();
+  };
+  $('#kbd').onclick = e => { const b = e.target.closest('[data-k]'); if (b) press(b.dataset.k); };
+  KEYH = e => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^[a-zA-Z0-9]$/.test(e.key)) press(e.key.toUpperCase());
+    else if (e.key === 'Backspace') press('BS');
+    else if (e.key === 'Enter') { if (!$('#go').disabled) $('#go').click(); }
+    else return;
+    e.preventDefault();
+  };
+  $('#go').onclick = safe(async () => {
+    const r = await GET('cars/lookup?plate=' + encodeURIComponent(plate));
+    if (r.car) go('car', { car: r.car }); else go('register', { plate: r.plate });
+  });
+  draw();
 };
 
+// 2-qadam (bazada bor mashina)
 VIEWS.car = async () => {
-  const r = await GET('cars/lookup?plate=' + encodeURIComponent(S.ctx.plate));
-  if (!r.car) return newCarForm(r.plate);
-  S.ctx.car = r.car;
-  const c = r.car, last = c.history.find(h => h.type === 'zamena');
-  const s = S.boot.settings;
-  const inProgress = c.history.find(h => ['jarayonda', 'tayyor'].includes(h.status));
-  $('#app').innerHTML = `<div class="pl-shell">
-    <div class="card"><div class="row"><div class="sp"><div class="big">${plateFmt(c.plate)}</div>
-      <div class="muted">${esc(c.model || 'Model kiritilmagan')}</div></div>
-      <button class="btn" id="edcar">Tahrirlash</button></div>
-      <div class="grid g3" style="margin-top:12px">
-        <div><div class="muted small">Egasi</div><b>${esc(c.customer_name || '—')}</b><div>${esc(c.customer_phone || '')}</div></div>
-        <div><div class="muted small">Oxirgi probeg</div><b>${km(c.last_mileage)}</b>${last?.next_mileage ? `<div class="small">Keyingisi: ${km(last.next_mileage)}</div>` : ''}</div>
-        <div><div class="muted small">Keshbek balansi</div><b class="pos">${sum(c.customer_cashback || 0)}</b></div>
-      </div>
-      ${last ? `<div class="sum-box" style="margin-top:12px"><b>Oxirgi marta (${dateOf(last.created_at)}):</b> ${orderLine(last)}</div>` : ''}
-    </div>
-    ${inProgress ? `<div class="warn-box">Bu mashina hozir navbatda (#${inProgress.id}, ${STATUS[inProgress.status]}). <button class="btn sm" id="openip">Ochish</button></div>` : ''}
-    <button class="btn p lg" id="neworder" style="width:100%;margin-bottom:14px">+ Moy almashtirishni boshlash</button>
-    <div class="card hist"><h3>Tarix</h3>${c.history.length ? c.history.map(h => `<div class="h"><div class="row"><b>${dateOf(h.created_at)}</b>
-      <span class="muted">${km(h.mileage)}</span><span class="sp"></span><span class="tag ${h.status}">${STATUS[h.status]}</span><b>${h.status === 'yopilgan' ? sum(h.total) : ''}</b></div>
-      <div class="small">${orderLine(h)}</div>${h.oil_in || h.oil_out ? `<div class="small muted">Quyildi ${qtyFmt(h.oil_in)} L · To'kib olindi ${qtyFmt(h.oil_out)} L</div>` : ''}</div>`).join('') : '<div class="empty">Birinchi tashrif</div>'}</div></div>`;
-  $('#neworder').onclick = () => go('order', { car: c, form: true });
-  $('#edcar').onclick = () => editCar(c);
-  if (inProgress) $('#openip').onclick = safe(async () => go('order', { car: c, order: await GET('orders/' + inProgress.id), form: true }));
+  const c = S.ctx.car = await GET('cars/' + S.ctx.car.id);
+  const last = c.history.find(h => h.type === 'zamena' && h.status === 'yopilgan');
+  const open = c.history.find(h => ['jarayonda', 'tayyor'].includes(h.status));
+  const missing = [!c.model && 'mashina nomi', !c.transmission && 'A/T yoki M/T', !c.color && 'rangi', !c.customer_phone && 'mijoz telefoni'].filter(Boolean);
+  $('#app').innerHTML = `<div class="pl-shell">${carHeader(c)}
+    ${last ? `<div class="card"><div class="lbl">Oxirgi zamena — ${dateOf(last.created_at)}</div><div class="row"><span class="big2">${km(last.mileage)}</span><span>${orderLine(last)}</span></div></div>` : ''}
+    ${missing.length ? `<div class="warn-box">To'ldirilmagan: <b>${missing.join(', ')}</b>. Mijoz to'liq kiritilmasa zamena qilib bo'lmaydi.</div>` : ''}
+    ${open ? `<div class="warn-box">Bu mashina hozir navbatda — ${STATUS[open.status]}.</div>` : ''}
+    <div class="bigbtns"><button class="btn xl" id="back">← Orqaga</button><button class="btn xl" id="edit">✎ O'zgartirish</button>
+      ${open ? `<button class="btn p xl" id="openo">Zakazni ochish →</button>` : `<button class="btn p xl" id="start">Zamena boshlash →</button>`}</div></div>`;
+  $('#back').onclick = () => go('kiritish');
+  $('#edit').onclick = () => go('register', { car: c });
+  if (open) $('#openo').onclick = safe(async () => go('order', { car: c, order: await GET('orders/' + open.id), form: true }));
+  else $('#start').onclick = () => missing.length ? go('register', { car: c }) : go('order', { car: c, form: true });
 };
 
-function carFormHtml(c = {}) {
-  return `<label class="f"><span>Mashina modeli</span><input id="cm" value="${esc(c.model || '')}" placeholder="Cobalt, Nexia 3, Gentra…" list="models"></label>
-    <datalist id="models">${['Cobalt', 'Nexia 3', 'Nexia 2', 'Gentra', 'Lacetti', 'Spark', 'Damas', 'Malibu', 'Tracker', 'Captiva', 'Onix', 'Matiz', 'Kia K5', 'Hyundai Elantra'].map(m => `<option>${m}</option>`).join('')}</datalist>
-    <div class="grid g2"><label class="f"><span>Mijoz ismi</span><input id="cn" value="${esc(c.customer_name || '')}"></label>
-    <label class="f"><span>Telefon (keshbek uchun)</span><input id="cp" type="tel" value="${esc(c.customer_phone || '')}" placeholder="90 123 45 67"></label></div>`;
-}
-const carFormVal = el => ({ model: $('#cm', el).value.trim(), customer_name: $('#cn', el).value.trim(), phone: $('#cp', el).value.trim() });
+// Mijoz kiritish / o'zgartirish
+VIEWS.register = async () => {
+  const c = S.ctx.car || {};
+  const f = S.ctx.f || (S.ctx.f = {
+    plate: c.plate || S.ctx.plate, model: c.model || '', transmission: c.transmission || '', color: c.color || '',
+    phone: phoneFmt(c.customer_phone || ''), name: c.customer_name || '',
+  });
+  const models = S.boot.car_models.map(m => m.name);
+  const custom = f.model && !models.includes(f.model);
+  $('#app').innerHTML = `<div class="pl-shell">
+    <div class="card"><div class="grid g2 hdr">
+      <div><div class="lbl">Mashina nomi</div><div class="big2" id="mshow"></div></div>
+      <div><div class="lbl">Mashina raqami</div>${plateBox(f.plate, 'sm')}</div></div></div>
+    <div class="card"><div class="lbl">1. Mashina nomi</div><div class="tiles" id="models">
+      ${models.map(m => `<button class="tile" data-m="${esc(m)}">${esc(m)}</button>`).join('')}
+      <button class="tile" data-m="" id="mother">${custom ? esc(f.model) + ' ✎' : 'Boshqa ✎'}</button></div></div>
+    <div class="card"><div class="lbl">2. Uzatmalar qutisi</div><div class="tiles two" id="tr">
+      <button class="tile xl" data-t="AT">A/T<small>avtomat</small></button><button class="tile xl" data-t="MT">M/T<small>mexanika</small></button></div></div>
+    <div class="card"><div class="lbl">3. Rangi</div><div class="tiles" id="col">
+      ${COLORS.map(([n, bg]) => `<button class="tile col" data-c="${esc(n)}"><span class="cdot lg" style="background:${bg}"></span>${esc(n)}</button>`).join('')}</div></div>
+    <div class="card"><div class="lbl">4. Mijoz telefoni (majburiy)</div>
+      <div class="phone-in"><span>+998</span><input id="ph" inputmode="numeric" autocomplete="off" placeholder="88 226 15 00" value="${esc(f.phone)}"></div>
+      <div id="phinfo" class="small" style="margin-top:6px"></div>
+      <div class="lbl" style="margin-top:16px">Mijoz ismi</div><input id="nm" class="in-xl" value="${esc(f.name)}" placeholder="Ismi (ixtiyoriy)" autocomplete="off"></div>
+    <div class="bigbtns"><button class="btn xl" id="back">← Orqaga</button><button class="btn p xl" id="save">${c.id ? 'Saqlash' : 'Saqlash va zamena →'}</button></div></div>`;
+  const mark = () => {
+    $('#mshow').innerHTML = f.model ? `${esc(f.model)} ${f.transmission ? `<span class="tr">${TRANS[f.transmission]}</span>` : ''} ${colorDot(f.color)}` : '<span class="muted">tanlang ↓</span>';
+    $$('#models [data-m]').forEach(b => b.classList.toggle('on', b.id === 'mother' ? !!f.model && !models.includes(f.model) : b.dataset.m === f.model));
+    $('#mother').textContent = f.model && !models.includes(f.model) ? f.model + ' ✎' : 'Boshqa ✎';
+    $$('#tr [data-t]').forEach(b => b.classList.toggle('on', b.dataset.t === f.transmission));
+    $$('#col [data-c]').forEach(b => b.classList.toggle('on', b.dataset.c === f.color));
+  };
+  $('#models').onclick = e => {
+    const b = e.target.closest('[data-m]'); if (!b) return;
+    if (b.id !== 'mother') { f.model = b.dataset.m; return mark(); }
+    const m = modal('Mashina nomi', `<input id="mn" class="in-xl" placeholder="Masalan: BYD Han, Chery Arrizo 8" value="${esc(custom ? f.model : '')}">
+      <div class="bigbtns"><button class="btn p xl" id="ok">OK</button></div>`);
+    setTimeout(() => $('#mn', m.el).focus(), 50);
+    const ok = () => { const v = $('#mn', m.el).value.trim(); if (v) f.model = v; m.close(); mark(); };
+    $('#ok', m.el).onclick = ok; $('#mn', m.el).onkeydown = e => e.key === 'Enter' && ok();
+  };
+  $('#tr').onclick = e => { const b = e.target.closest('[data-t]'); if (b) { f.transmission = b.dataset.t; mark(); } };
+  $('#col').onclick = e => { const b = e.target.closest('[data-c]'); if (b) { f.color = b.dataset.c; mark(); } };
+  let looked = '';
+  const phoneInput = async () => {
+    const el = $('#ph'); el.value = phoneFmt(el.value); f.phone = el.value;
+    const d = el.value.replace(/\D/g, '');
+    if (d.length < 9) { $('#phinfo').textContent = ''; return; }
+    if (d === looked) return; looked = d;
+    try {
+      const list = await GET('customers?q=' + d);
+      const cu = list.find(x => x.phone === '998' + d);
+      if (cu) {
+        $('#phinfo').innerHTML = `<span class="pos">✓ Bazadagi mijoz: <b>${esc(cu.name || 'ismsiz')}</b>${cu.plates ? ' · mashinalari: ' + cu.plates.split(', ').map(plateFmt).join(', ') : ''}</span>`;
+        if (!$('#nm').value && cu.name) { $('#nm').value = cu.name; f.name = cu.name; }
+      } else $('#phinfo').innerHTML = '<span class="muted">Yangi mijoz</span>';
+    } catch { }
+  };
+  $('#ph').oninput = phoneInput;
+  $('#nm').oninput = e => { f.name = e.target.value; };
+  $('#back').onclick = () => c.id ? go('car', { car: c }) : go('kiritish', { plate: f.plate });
+  $('#save').onclick = safe(async () => {
+    const err = !f.model ? 'Mashina nomini tanlang' : !f.transmission ? 'A/T yoki M/T ni tanlang' : !f.color ? 'Mashina rangini tanlang'
+      : f.phone.replace(/\D/g, '').length !== 9 ? "Mijoz telefon raqamini to'liq kiriting" : '';
+    if (err) throw new Error(err);
+    const body = { model: f.model, transmission: f.transmission, color: f.color, phone: '998' + f.phone.replace(/\D/g, ''), customer_name: $('#nm').value.trim() };
+    if (c.id) { const car = await PUT('cars/' + c.id, body); toast('Saqlandi'); go('car', { car }); }
+    else { const car = await POST('cars', { plate: f.plate, ...body }); await reloadBoot(); toast("Mijoz qo'shildi"); go('order', { car, form: true }); }
+  });
+  mark(); if (f.phone) phoneInput();
+};
 
-function newCarForm(plate) {
-  $('#app').innerHTML = `<div class="pl-shell"><div class="card"><h3>Yangi mashina — bazada yo'q</h3>
-    <div class="big" style="margin-bottom:12px">${plateFmt(plate)}</div><div id="cf">${carFormHtml()}</div>
-    <div class="row end"><button class="btn" id="back">Orqaga</button><button class="btn p lg" id="save">Qo'shish va davom etish</button></div></div></div>`;
-  $('#back').onclick = () => go('home');
-  $('#save').onclick = safe(async () => { const car = await POST('cars', { plate, ...carFormVal($('#cf')) }); toast("Mashina bazaga qo'shildi"); go('order', { car, form: true }); });
-  focusLater($('#cm'));
-}
-
-function editCar(c) {
-  const m = modal('Mashina: ' + c.plate, carFormHtml(c) + `<div class="row end"><button class="btn p" id="sv">Saqlash</button></div>`);
-  $('#sv', m.el).onclick = safe(async () => { await PUT('cars/' + c.id, carFormVal(m.el)); m.close(); toast('Saqlandi'); render(); });
-}
-
+// 3-qadam: zamena formasi
 VIEWS.order = async () => {
   const { car, order } = S.ctx;
-  const s = S.boot.settings;
-  const items = order ? itemsFromOrder(order) : [];
-  let services = order ? [...order.services] : [];
+  const all = order ? itemsFromOrder(order) : [];
+  const oilIdx = all.findIndex(i => i.category === 'moy' && prod(i.product_id)?.kind !== 'karobka');
+  let oil = oilIdx >= 0 ? { product_id: all[oilIdx].product_id, qty: +all[oilIdx].qty, price: all[oilIdx].price } : null;
+  const items = all.filter((_, i) => i !== oilIdx);
   let master = order?.master_id || null;
-  const lastSeller = LS.get('seller', null);
-  const oils = S.boot.products.filter(p => p.active && p.category === 'moy');
-  const lastOil = car.history.find(h => h.type === 'zamena')?.items.find(i => i.category === 'moy');
-  $('#app').innerHTML = `<div class="pl-shell">
-    <div class="card"><div class="row"><div class="sp"><div class="big">${plateFmt(car.plate)}</div><div class="muted">${esc(car.model || '')} · ${esc(car.customer_name || '')}</div></div>
-      ${order ? `<span class="tag ${order.status}">#${order.id} ${STATUS[order.status]}</span>` : ''}</div></div>
-    <div class="card"><h3>1. Probeg (km)</h3>
-      <div class="grid g2"><label class="f"><span>Hozirgi probeg ${car.last_mileage ? '(avvalgi: ' + km(car.last_mileage) + ')' : ''}</span>
-        <input id="mil" type="number" inputmode="numeric" value="${order?.mileage || ''}" style="font-size:22px;font-weight:700"></label>
-      <label class="f"><span>Keyingi almashtirish (km)</span><input id="nmil" type="number" inputmode="numeric" value="${order?.next_mileage || ''}" placeholder="avtomatik +${fmt(s.next_service_km)}"></label></div></div>
-    <div class="card"><h3>2. Usta <span class="neg">*</span></h3><div class="masters" id="ms">${employees('usta').map(e => `<div class="chip ${master == e.id ? 'on' : ''}" data-id="${e.id}">${esc(e.name)}</div>`).join('') || '<div class="muted">Ustalar kiritilmagan (kassa → Xodimlar)</div>'}</div></div>
-    <div class="card"><h3>3. Moy</h3>
-      <div class="grid g3"><label class="f"><span>Qaysi moy (mijoz tanlaydi)</span><select id="oil"><option value="">— tanlang —</option>
-        ${oils.map(p => `<option value="${p.id}" ${(lastOil && !order && lastOil.product_id === p.id) ? 'selected' : ''}>${esc(p.name)} — ${fmt(p.price)}</option>`).join('')}</select>
-        ${lastOil && !order ? `<div class="small muted">Oxirgi safar: ${esc(lastOil.name)}</div>` : ''}</label>
-      <label class="f"><span>Quyilgan moy (L)</span><input id="oin" type="number" step="0.1" inputmode="decimal" value="${order?.oil_in ?? ''}" placeholder="3.5"></label>
-      <label class="f"><span>To'kib olingan eski moy (L)</span><input id="oout" type="number" step="0.1" inputmode="decimal" value="${order?.oil_out ?? ''}" placeholder="3.2"></label></div>
-      <button class="btn" id="addoil">Moyni ro'yxatga qo'shish</button></div>
-    <div class="card"><h3>4. Nimalar almashtirildi / xizmatlar</h3><div class="chips" id="sv">${SERVICES.map(x => `<span class="chip ${services.includes(x) ? 'on' : ''}">${esc(x)}</span>`).join('')}</div></div>
-    <div class="card"><div class="row"><h3 class="sp">5. Mahsulotlar</h3><button class="btn" data-cat="filtr">+ Filtr</button><button class="btn" data-cat="">+ Boshqa</button></div>
-      <div id="items"></div><div class="small muted">Tekin berilgan narsalarga «Bonus» belgisini qo'ying — tannarxi moy foydasidan qoplanadi.</div></div>
-    <div class="card"><div class="grid g2"><label class="f"><span>Zamena sotuvchisi</span><select id="seller"><option value="">—</option>
-      ${employees('sotuvchi').map(e => `<option value="${e.id}" ${(order?.seller_id || lastSeller) == e.id ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></label>
-      <label class="f"><span>Izoh</span><input id="note" value="${esc(order?.note || '')}"></label></div>
-      <div class="row end"><button class="btn" id="cancel">${order ? 'Zakazni bekor qilish' : 'Orqaga'}</button>
-      <button class="btn p lg" id="submit">${order ? 'Saqlash' : 'Almashtirilmoqda → kassaga'}</button></div></div></div>`;
+  const oils = S.boot.products.filter(p => p.active && p.category === 'moy' && p.kind !== 'karobka');
+  const lastZ = (car.history || []).find(h => h.type === 'zamena' && h.status === 'yopilgan' && h.id !== order?.id);
+  const lastOil = lastZ?.items.find(i => i.category === 'moy');
+  $('#app').innerHTML = `<div class="pl-shell">${carHeader(car)}
+    <div class="card"><div class="lbl">1. Probeg (km) ${car.last_mileage ? `<span class="muted">— oxirgi: ${km(car.last_mileage)}</span>` : ''}</div>
+      <input id="mil" class="in-xl mil" inputmode="numeric" autocomplete="off" placeholder="masalan 125 000" value="${order?.mileage ? fmt(order.mileage) : ''}"></div>
+    <div class="card"><div class="lbl">2. Usta (majburiy)</div><div class="tiles" id="ms">
+      ${employees('usta').map(e => `<button class="tile xl" data-id="${e.id}">${esc(e.name)}</button>`).join('') || '<div class="muted">Ustalar kiritilmagan (kassa → Xodimlar)</div>'}</div></div>
+    <div class="card"><div class="lbl">3. Moy (mijoz tanlaydi)</div><div class="tiles" id="oils">
+      ${oils.map(p => `<button class="tile" data-id="${p.id}">${esc(p.name.replace(/\s*\(.*\)\s*/, ''))}<small>${fmt(p.price)} / ${esc(p.unit === 'litr' ? 'L' : p.unit)}${lastOil?.product_id === p.id ? ' · ★ oxirgi safar' : ''}</small></button>`).join('')}</div>
+      <div class="lbl" style="margin-top:16px">Necha litr quyildi</div>
+      <div class="row"><div class="tiles lit" id="lit">${LITERS.map(l => `<button class="tile" data-l="${l}">${l} L</button>`).join('')}</div>
+        <div class="stepper"><button class="qbtn" data-d="-0.5">−</button><span class="qty" id="lq">0</span><button class="qbtn" data-d="0.5">+</button></div></div></div>
+    <div class="card"><div class="lbl">4. Filtrlar — har bosishda 1 ta qo'shiladi</div><div class="tiles" id="flt">
+      ${FILTERS.map(([k, n]) => `<button class="tile xl" data-f="${k}">${n}<small id="fs-${k}"></small><span class="cnt" id="fc-${k}" hidden></span></button>`).join('')}
+      <button class="tile xl" id="other">+ Boshqa<small>antifriz, karobka moyi…</small></button></div></div>
+    <div class="card"><div class="lbl">Ro'yxat</div><div id="list"></div></div>
+    <div class="card"><input id="note" class="in-xl" placeholder="Izoh (ixtiyoriy)" value="${esc(order?.note || '')}"></div>
+    <div class="bigbtns"><button class="btn xl ${order ? 'bad' : ''}" id="cancel">${order ? 'Bekor qilish' : '← Orqaga'}</button>
+      <button class="btn p xl" id="submit">${order ? 'Saqlash' : 'Almashtirilmoqda → kassaga'}</button></div></div>`;
 
-  const ed = itemsEditor($('#items'), items, null);
-  $('#ms').onclick = e => { const c = e.target.closest('[data-id]'); if (!c) return; master = +c.dataset.id; $$('#ms .chip').forEach(x => x.classList.toggle('on', x === c)); $('#ms').parentElement.classList.remove('req'); };
-  $('#sv').onclick = e => { const c = e.target.closest('.chip'); if (!c) return; c.classList.toggle('on'); services = $$('#sv .chip.on').map(x => x.textContent); };
-  $$('[data-cat]').forEach(b => b.onclick = () => pickProduct(p => { ed.add(p); autoService(p); }, { cat: b.dataset.cat }));
-  const autoService = p => {
-    const n = p.name.toLowerCase(); const map = [['moy filtr', 'Moy filtri'], ['havo', 'Havo filtri'], ['salon', 'Salon filtri'], ["yoqilg'i", "Yoqilg'i filtri"], ['karobka', 'Karobka moyi'], ['antifriz', 'Antifriz'], ['tormoz', 'Tormoz suyuqligi'], ['motor moy', 'Motor moyi']];
-    for (const [k, v] of map) if (n.includes(k) && !services.includes(v)) { services.push(v); $$('#sv .chip').find(x => x.textContent === v)?.classList.add('on'); }
+  const drawOil = () => {
+    $$('#oils [data-id]').forEach(b => b.classList.toggle('on', oil && +b.dataset.id === oil.product_id));
+    $$('#lit [data-l]').forEach(b => b.classList.toggle('on', oil && +b.dataset.l === oil.qty));
+    $('#lq').textContent = oil ? qtyFmt(oil.qty) + ' L' : '—';
+    drawList();
   };
-  $('#addoil').onclick = () => {
-    const p = prod($('#oil').value); const l = +$('#oin').value;
-    if (!p) return toast('Moyni tanlang', true);
-    if (!l) return toast('Quyilgan litrni kiriting', true);
-    const ex = items.find(i => i.product_id === p.id); if (ex) ex.qty = l; else items.unshift({ product_id: p.id, name: p.name, category: p.category, qty: l, price: p.price, is_bonus: false });
-    ed.draw(); autoService(p);
+  const drawList = () => {
+    const rows = [];
+    let total = 0;
+    if (oil) { const p = prod(oil.product_id); const s = Math.round(oil.qty * oil.price); total += s; rows.push(`<div class="irow"><span class="sp"><span class="tag moy">Moy</span> ${esc(p?.name || '')} — <b>${qtyFmt(oil.qty)} L</b></span><b class="num">${fmt(s)}</b></div>`); }
+    items.forEach((it, i) => {
+      const s = it.is_bonus ? 0 : Math.round(it.qty * it.price); total += s;
+      rows.push(`<div class="irow" data-i="${i}"><span class="sp"><span class="tag ${it.category}">${CATS[it.category]}</span> ${esc(it.name)}</span>
+        <button class="qbtn" data-q="-1">−</button><span class="qty">${qtyFmt(it.qty)}</span><button class="qbtn" data-q="1">+</button>
+        <button class="bonus-t ${it.is_bonus ? 'on' : ''}" data-b>Bonus</button><b class="num" style="min-width:90px">${it.is_bonus ? 'tekin' : fmt(s)}</b></div>`);
+    });
+    $('#list').innerHTML = rows.join('') + (rows.length ? `<div class="irow tot"><span class="sp">Jami</span><b>${sum(total)}</b></div>` : '<div class="empty">Hali hech narsa tanlanmagan</div>');
+    FILTERS.forEach(([k]) => {
+      const n = items.filter(i => prod(i.product_id)?.kind === k && i.category === 'filtr').reduce((a, i) => a + +i.qty, 0);
+      const c = $('#fc-' + k); c.hidden = !n; c.textContent = n;
+    });
+  };
+  const addItem = p => {
+    const ex = items.find(i => i.product_id === p.id && !i.is_bonus);
+    if (ex) ex.qty = +ex.qty + 1; else items.push({ product_id: p.id, name: p.name, category: p.category, qty: 1, price: p.price, is_bonus: false });
+    drawList();
+  };
+  // Mashinaga mos filtrni avtomatik topish
+  const fits = kind => {
+    const model = (car.model || '').toLowerCase();
+    return S.boot.products.filter(p => p.active && p.category === 'filtr' && p.kind === kind && (p.models || []).some(m => m.toLowerCase() === model));
+  };
+  const filterHint = f => f.length === 1 ? '✓ mos filtr bor' : f.length ? f.length + ' ta mos — tanlang' : 'belgilanmagan — tanlang';
+  FILTERS.forEach(([k]) => { const f = fits(k); $('#fs-' + k).textContent = filterHint(f); });
+  const addFilter = kind => {
+    const f = fits(kind);
+    if (f.length === 1) return addItem(f[0]);
+    const title = FILTERS.find(x => x[0] === kind)[1] + ' — ' + (car.model || '');
+    const pool = f.length ? f : S.boot.products.filter(p => p.active && p.category === 'filtr');
+    const m = modal(title, `${f.length ? '' : `<div class="warn-box">«${esc(car.model)}» uchun bu filtr belgilanmagan. Qaysi filtrni qo'yasiz? (xitoy mashinalariga moslab kesiladigan filtrni ham tanlash mumkin)</div>
+      <label class="row" style="margin-bottom:12px;font-size:18px"><input type="checkbox" id="rem" checked style="width:28px;min-height:28px"> Keyingi safar «${esc(car.model)}» uchun avtomatik qo'shilsin</label>`}
+      <div class="tiles one">${pool.sort((a, b) => (b.kind === kind) - (a.kind === kind)).map(p => `<button class="tile" data-id="${p.id}">${esc(p.name)}<small>${fmt(p.price)} · qoldiq ${qtyFmt(p.stock)}</small></button>`).join('') || '<div class="empty">Omborda filtr yo\'q</div>'}</div>`);
+    m.el.onclick = safe(async e => {
+      const b = e.target.closest('[data-id]'); if (!b) return;
+      const p = prod(b.dataset.id);
+      if (!f.length && $('#rem', m.el)?.checked && car.model) {
+        const upd = await POST(`products/${p.id}/models`, { model: car.model });
+        p.models = upd.models; if (p.kind !== kind) toast(`Eslab qolindi (${p.name})`);
+        FILTERS.forEach(([k]) => { const ff = fits(k); $('#fs-' + k).textContent = filterHint(ff); });
+      }
+      m.close(); addItem(p);
+    });
+  };
+
+  $('#mil').oninput = e => { const d = e.target.value.replace(/\D/g, '').slice(0, 7); e.target.value = d ? fmt(+d) : ''; };
+  $('#ms').onclick = e => { const b = e.target.closest('[data-id]'); if (!b) return; master = +b.dataset.id; $$('#ms .tile').forEach(x => x.classList.toggle('on', x === b)); };
+  $$('#ms .tile').forEach(x => x.classList.toggle('on', +x.dataset.id === master));
+  $('#oils').onclick = e => {
+    const b = e.target.closest('[data-id]'); if (!b) return; const p = prod(b.dataset.id);
+    if (oil && oil.product_id === p.id) oil = null; else oil = { product_id: p.id, price: p.price, qty: oil?.qty || 0 };
+    drawOil();
+  };
+  $('#lit').onclick = e => { const b = e.target.closest('[data-l]'); if (!b) return; if (!oil) return toast('Avval moyni tanlang', true); oil.qty = +b.dataset.l; drawOil(); };
+  $('.stepper').onclick = e => { const b = e.target.closest('[data-d]'); if (!b) return; if (!oil) return toast('Avval moyni tanlang', true); oil.qty = Math.max(0, Math.round((oil.qty + +b.dataset.d) * 10) / 10); drawOil(); };
+  $('#flt').onclick = e => { const b = e.target.closest('[data-f]'); if (b) addFilter(b.dataset.f); };
+  $('#other').onclick = () => pickProduct(p => addItem(p));
+  $('#list').onclick = e => {
+    const r = e.target.closest('[data-i]'); if (!r) return; const it = items[r.dataset.i];
+    const q = e.target.closest('[data-q]');
+    if (q) { it.qty = +it.qty + +q.dataset.q; if (it.qty <= 0) items.splice(r.dataset.i, 1); }
+    else if (e.target.closest('[data-b]')) it.is_bonus = !it.is_bonus;
+    drawList();
   };
   $('#cancel').onclick = safe(async () => {
-    if (!order) return go('car', { plate: car.plate });
-    if (await confirmBox('Zakaz bekor qilinsinmi? Mahsulotlar omborga qaytadi.')) { await POST(`orders/${order.id}/cancel`); toast('Bekor qilindi'); go('home'); }
+    if (!order) return go('car', { car });
+    if (await confirmBox('Zakaz bekor qilinsinmi? Mahsulotlar omborga qaytadi.')) { await POST(`orders/${order.id}/cancel`); toast('Bekor qilindi'); go('bugun'); }
   });
   $('#submit').onclick = safe(async () => {
+    const mil = +$('#mil').value.replace(/\D/g, '');
+    if (!mil) { $('#mil').focus(); throw new Error('Probegni kiriting'); }
     if (!master) { $('#ms').scrollIntoView({ behavior: 'smooth', block: 'center' }); throw new Error('Ustani belgilang — majburiy'); }
-    const mil = +$('#mil').value; if (!mil) { $('#mil').focus(); throw new Error('Probegni kiriting'); }
-    // Moy tanlangan, lekin ro'yxatga qo'shilmagan bo'lsa — avtomatik qo'shamiz
-    const oilP = prod($('#oil').value), oin = +$('#oin').value;
-    if (oilP && oin && !items.some(i => i.category === 'moy')) items.unshift({ product_id: oilP.id, name: oilP.name, category: 'moy', qty: oin, price: oilP.price, is_bonus: false });
+    if (oil && !oil.qty) throw new Error('Necha litr quyilganini tanlang');
+    if (!oil && !(await confirmBox('Moy tanlanmadi. Shunday davom etilsinmi?'))) return;
+    const all = (oil ? [{ ...oil, is_bonus: false }] : []).concat(items);
+    const services = [...new Set(all.map(i => { const p = prod(i.product_id); return p?.category === 'filtr' ? (FILTERS.find(f => f[0] === p.kind)?.[1] || 'Filtr') : p?.category === 'moy' ? (p.kind === 'karobka' ? 'Karobka moyi' : 'Motor moyi') : null; }).filter(Boolean))];
     const body = {
-      type: 'zamena', car_id: car.id, mileage: mil, next_mileage: +$('#nmil').value || null, master_id: master,
-      seller_id: +$('#seller').value || null, oil_in: $('#oin').value, oil_out: $('#oout').value,
-      services, note: $('#note').value, items: itemsPayload(items),
+      type: 'zamena', car_id: car.id, mileage: mil, master_id: master, seller_id: LS.get('seller', null),
+      oil_in: oil ? oil.qty : null, services, note: $('#note').value, items: itemsPayload(all),
     };
-    if (body.seller_id) LS.set('seller', body.seller_id);
-    if (!items.length && !(await confirmBox("Mahsulot qo'shilmagan. Shunday davom etilsinmi?"))) return;
-    const save = async force => order ? PUT('orders/' + order.id, body) : POST('orders', { ...body, force });
-    try { await save(false); }
-    catch (e) {
+    const save = force => order ? PUT('orders/' + order.id, body) : POST('orders', { ...body, force });
+    try { await save(false); } catch (e) {
       if (/Probeg avvalgidan/.test(e.message) && await confirmBox(e.message + ' Baribir saqlansinmi?')) await save(true);
       else throw e;
     }
     toast(order ? 'Saqlandi' : 'Almashtirilmoqda — kassaga yuborildi');
-    go('home');
+    go(order ? 'bugun' : 'kiritish');
   });
+  drawOil();
+};
+
+// Faqat bugungi tarix
+VIEWS.bugun = async () => {
+  const t = await GET('today');
+  $('#app').innerHTML = `<div class="pl-shell">
+    <div class="card"><div class="row"><div class="sp"><div class="lbl">Bugun — ${dateOf(t.date)}</div><div class="big">${t.count} ta mashina</div></div>
+      <div class="chips">${t.by_master.map(m => `<span class="chip on">${esc(m.name || '—')}: <b>${m.n}</b></span>`).join('')}</div></div></div>
+    ${t.orders.map(o => `<div class="card ocard ${o.status}">
+      <div class="row"><span class="plate-mini">${plateFmt(o.plate)}</span><span class="big2 sp">${esc(o.model || '')} ${o.transmission ? `<span class="tr">${TRANS[o.transmission]}</span>` : ''} ${colorDot(o.color)}</span>
+        <span class="tag ${o.status}">${STATUS[o.status]}</span></div>
+      <div class="row muted" style="margin:6px 0"><span>${timeOf(o.created_at)}</span><span>Usta: <b>${esc(o.master_name || '—')}</b></span><span>${km(o.mileage)}</span><span>${phoneShow(o.customer_phone)}</span></div>
+      <div>${orderLine(o) || '—'}</div>
+      ${['jarayonda', 'tayyor'].includes(o.status) ? `<div class="bigbtns">${o.status === 'jarayonda' ? `<button class="btn ok xl" data-ready="${o.id}">✓ Tayyor</button>` : ''}<button class="btn xl" data-edit="${o.id}">✎ Tahrirlash</button></div>` : ''}
+    </div>`).join('') || '<div class="card empty">Bugun hali zamena yo\'q</div>'}</div>`;
+  $$('[data-ready]').forEach(b => b.onclick = safe(async () => { await PUT('orders/' + b.dataset.ready, { status: 'tayyor' }); toast('Tayyor — kassaga bildirildi'); render(); }));
+  $$('[data-edit]').forEach(b => b.onclick = safe(async () => { const o = await GET('orders/' + b.dataset.edit); const car = await GET('cars/' + o.car_id); go('order', { car, order: o, form: true }); }));
 };
 
 // ================================================================== KASSA
@@ -411,7 +562,7 @@ VIEWS.navbat = async () => {
   $('#app').innerHTML = `<div class="row"><h2 class="sp">Navbat — to'lov kutilmoqda (${list.length})</h2><button class="btn p" id="pos">+ Oddiy sotuv</button></div>
     ${list.length ? `<div class="queue">${list.map(o => `<div class="card qcard ${o.status} ${seen.has(o.id) ? '' : 'new'}" data-id="${o.id}">
       <div class="row"><span class="plate-t sp">${plateFmt(o.plate)}</span><span class="tag ${o.status}">${STATUS[o.status]}</span></div>
-      <div class="muted">${esc(o.model || '')} · ${esc(o.customer_name || 'mijoz noma\'lum')}</div>
+      <div>${carDesc(o)}</div><div class="muted small">${esc(o.customer_name || '')} ${phoneShow(o.customer_phone)}</div>
       <div class="small" style="margin:8px 0">${orderLine(o) || '—'}</div>
       <div class="row small muted"><span>Usta: <b>${esc(o.master_name || '—')}</b></span><span>${km(o.mileage)}</span><span class="sp"></span><span>${timeOf(o.created_at)}</span></div>
       <div class="row" style="margin-top:8px"><span class="sp muted small">${o.customer_cashback ? 'Keshbek: ' + fmt(o.customer_cashback) : ''}</span><span class="big" style="font-size:22px">${sum(o.subtotal)}</span></div>
@@ -462,8 +613,8 @@ function payPayload(el, tot) {
 function checkout(o) {
   const items = itemsFromOrder(o);
   const m = modal(`To'lov: ${o.plate} — #${o.id}`, `
-    <div class="row muted small" style="margin-bottom:8px"><span>${esc(o.model || '')}</span><span>Mijoz: <b>${esc(o.customer_name || '—')}</b> ${esc(o.customer_phone || '')}</span>
-      <span>Usta: <b>${esc(o.master_name || '—')}</b></span><span>Probeg: ${km(o.mileage)}</span>${o.oil_in ? `<span>Quyildi ${qtyFmt(o.oil_in)} L / to'kildi ${qtyFmt(o.oil_out)} L</span>` : ''}</div>
+    <div class="row muted small" style="margin-bottom:8px"><span>${carDesc(o)}</span><span>Mijoz: <b>${esc(o.customer_name || '—')}</b> ${o.customer_phone ? phoneShow(o.customer_phone) : ''}</span>
+      <span>Usta: <b>${esc(o.master_name || '—')}</b></span><span>Probeg: ${km(o.mileage)}</span>${o.oil_in ? `<span>Quyildi ${qtyFmt(o.oil_in)} L</span>` : ''}</div>
     ${o.services.length ? `<div class="chips small" style="margin-bottom:8px">${o.services.map(s => `<span class="tag xizmat">${esc(s)}</span>`).join('')}</div>` : ''}
     <div class="row"><h3 class="sp">Mahsulotlar</h3><button class="btn sm" id="add">+ Qo'shish</button></div><div id="it"></div>
     <div class="muted small" style="margin:6px 0 12px">Mijoz keshbeki: <b class="pos">${sum(o.customer_cashback || 0)}</b></div>
@@ -495,7 +646,7 @@ function offerReceipt(o) {
 function printReceipt(o) {
   let r = $('#receipt'); if (!r) { r = document.createElement('div'); r.id = 'receipt'; document.body.appendChild(r); }
   r.innerHTML = `<div style="text-align:center"><b>${esc(S.boot.settings.shop_name)}</b><br>${dateOf(o.closed_at)} ${timeOf(o.closed_at)} · #${o.id}</div>
-    ${o.plate ? `<div>Mashina: ${esc(o.plate)} · ${km(o.mileage)}</div><div>Keyingi almashtirish: ${km(o.next_mileage)}</div>` : ''}<hr>
+    ${o.plate ? `<div>Mashina: ${plateFmt(o.plate)} ${esc(o.model || '')} · ${km(o.mileage)}</div><div>Keyingi almashtirish: ${km(o.next_mileage)}</div>` : ''}<hr>
     ${o.items.map(i => `<div>${esc(i.name)}<br>&nbsp; ${qtyFmt(i.qty)} × ${fmt(i.price)} = ${i.is_bonus ? 'BONUS' : fmt(i.qty * i.price)}</div>`).join('')}<hr>
     ${o.discount ? `<div>Chegirma: −${fmt(o.discount)}</div>` : ''}${o.cashback_used ? `<div>Keshbekdan: −${fmt(o.cashback_used)}</div>` : ''}
     <div><b>JAMI: ${fmt(o.total)} so'm</b></div>${o.cashback_earned ? `<div>Keshbek: +${fmt(o.cashback_earned)} (balans ${fmt(o.customer_cashback)})</div>` : ''}
@@ -529,7 +680,7 @@ VIEWS.sotuv = async () => {
     const q = $('#ph').value.trim(); if (!q) return;
     const list = await GET('customers?q=' + encodeURIComponent(q.replace(/^\+?998/, '')));
     if (!list.length) { customer = { new: true, phone: q, cashback: 0 }; $('#cinfo').innerHTML = `Yangi mijoz sifatida saqlanadi: <b>${esc(q)}</b>`; }
-    else { customer = list[0]; $('#cinfo').innerHTML = `<b>${esc(customer.name || '—')}</b> ${esc(customer.phone)} · ${esc(customer.plates || '')}<br>Keshbek: <b class="pos">${sum(customer.cashback)}</b>`; }
+    else { customer = list[0]; $('#cinfo').innerHTML = `<b>${esc(customer.name || '—')}</b> ${phoneShow(customer.phone)} · ${(customer.plates || '').split(', ').map(plateFmt).join(', ')}<br>Keshbek: <b class="pos">${sum(customer.cashback)}</b>`; }
     recalc();
   });
   $('#pay').onclick = safe(async () => {
@@ -592,7 +743,7 @@ VIEWS.mahsulot = async () => {
     const q = $('#q').value.toLowerCase();
     $('#tb').innerHTML = ps.filter(p => (!f || p.category === f) && (!q || p.name.toLowerCase().includes(q))).map(p => {
       const mg = p.price - p.cost;
-      return `<tr class="click" data-id="${p.id}" style="${p.active ? '' : 'opacity:.5'}"><td>${esc(p.name)}${p.barcode ? `<div class="muted small">${esc(p.barcode)}</div>` : ''}</td>
+      return `<tr class="click" data-id="${p.id}" style="${p.active ? '' : 'opacity:.5'}"><td>${esc(p.name)}${p.barcode ? `<div class="muted small">${esc(p.barcode)}</div>` : ''}${p.models?.length ? `<div class="muted small">Mos: ${esc(p.models.join(', '))}</div>` : ''}</td>
       <td><span class="tag ${p.category}">${CATS[p.category]}</span></td><td class="num ${p.stock <= 0 && p.category !== 'xizmat' ? 'neg' : ''}">${p.category === 'xizmat' ? '—' : qtyFmt(p.stock) + ' ' + esc(p.unit)}</td>
       <td class="num">${fmt(p.cost)}</td><td class="num"><b>${fmt(p.price)}</b></td><td class="num ${mg < 0 ? 'neg' : 'pos'}">${fmt(mg)}</td><td class="num">›</td></tr>`;
     }).join('');
@@ -611,18 +762,39 @@ VIEWS.mahsulot = async () => {
 };
 
 function productForm(p) {
+  const sel = new Set(p?.models || []);
   const m = modal(p ? 'Mahsulot' : 'Yangi mahsulot', `
     <label class="f"><span>Nomi</span><input id="n" value="${esc(p?.name || '')}"></label>
     <div class="grid g3"><label class="f"><span>Kategoriya</span><select id="c">${Object.entries(CATS).map(([k, v]) => `<option value="${k}" ${p?.category === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+    <label class="f"><span>Turi</span><select id="k"></select></label>
     <label class="f"><span>O'lchov</span><select id="u">${['dona', 'litr', 'komplekt'].map(u => `<option ${p?.unit === u ? 'selected' : ''}>${u}</option>`).join('')}</select></label>
-    <label class="f"><span>Shtrix-kod</span><input id="b" value="${esc(p?.barcode || '')}"></label>
     <label class="f"><span>Tannarx (kelish narxi)</span><input id="co" type="number" value="${p?.cost ?? ''}"></label>
     <label class="f"><span>Sotuv narxi</span><input id="pr" type="number" value="${p?.price ?? ''}"></label>
+    <label class="f"><span>Shtrix-kod</span><input id="b" value="${esc(p?.barcode || '')}"></label>
     ${p ? `<label class="f"><span>Holat</span><select id="a"><option value="1">Faol</option><option value="0" ${p.active ? '' : 'selected'}>Arxiv</option></select></label>` : `<label class="f"><span>Boshlang'ich qoldiq</span><input id="st" type="number" value="0"></label>`}</div>
+    <div id="mwrap" class="sum-box" style="margin-bottom:12px"><div class="row"><b class="sp">Qaysi mashinalarga mos</b><input id="nmod" placeholder="+ boshqa model (Enter)" style="max-width:240px"></div>
+      <div class="chips" id="mods" style="margin-top:10px"></div>
+      <p class="small muted">Planshetda shu turdagi filtr tugmasi bosilganda, belgilangan mashinalar uchun aynan shu filtr qo'shiladi. Belgilanmagan mashinada (masalan, xitoy mashinalari) sotuvchi filtrni o'zi tanlaydi va tizim eslab qoladi.</p></div>
     <p class="small muted">Moy uchun narxni 1 litrga kiriting (quyma moy). Filtrni zarariga sotsangiz ham bo'ladi — hisobotda moy foydasidan qoplanishi ko'rinadi.</p>
-    <div class="row end"><button class="btn p" id="sv">Saqlash</button></div>`);
+    <div class="row end"><button class="btn p" id="sv">Saqlash</button></div>`, { wide: true });
+  const kindSel = () => {
+    const c = $('#c', m.el).value, ks = KINDS[c] || [];
+    $('#k', m.el).innerHTML = `<option value="">—</option>` + ks.map(([k, v]) => `<option value="${k}" ${p?.kind === k ? 'selected' : ''}>${v}</option>`).join('');
+    $('#k', m.el).disabled = !ks.length;
+    $('#mwrap', m.el).hidden = c !== 'filtr';
+  };
+  const drawMods = () => {
+    const names = [...new Set([...S.boot.car_models.map(x => x.name), ...sel])];
+    $('#mods', m.el).innerHTML = names.map(n => `<span class="chip ${sel.has(n) ? 'on' : ''}" data-m="${esc(n)}">${esc(n)}</span>`).join('');
+  };
+  $('#c', m.el).onchange = kindSel;
+  $('#mods', m.el).onclick = e => { const c = e.target.closest('[data-m]'); if (!c) return; const n = c.dataset.m; sel.has(n) ? sel.delete(n) : sel.add(n); drawMods(); };
+  $('#nmod', m.el).onkeydown = e => { if (e.key !== 'Enter') return; const v = e.target.value.trim(); if (v) { sel.add(v); e.target.value = ''; drawMods(); } };
+  kindSel(); drawMods();
   $('#sv', m.el).onclick = safe(async () => {
-    const b = { name: $('#n', m.el).value, category: $('#c', m.el).value, unit: $('#u', m.el).value, barcode: $('#b', m.el).value, cost: $('#co', m.el).value, price: $('#pr', m.el).value, active: p ? +$('#a', m.el).value : 1, stock: p ? undefined : $('#st', m.el).value };
+    const cat = $('#c', m.el).value;
+    const b = { name: $('#n', m.el).value, category: cat, kind: $('#k', m.el).value, unit: $('#u', m.el).value, barcode: $('#b', m.el).value, cost: $('#co', m.el).value, price: $('#pr', m.el).value, active: p ? +$('#a', m.el).value : 1, stock: p ? undefined : $('#st', m.el).value, models: cat === 'filtr' ? [...sel] : [] };
+    if (cat === 'filtr' && !b.kind) throw new Error('Filtr turini tanlang (moy / havo / salon / yoqilg\'i)');
     p ? await PUT('products/' + p.id, b) : await POST('products', b);
     await reloadBoot(); m.close(); toast('Saqlandi'); render();
   });
@@ -657,7 +829,7 @@ VIEWS.mijoz = async () => {
   $('#app').innerHTML = `<div class="row"><h2 class="sp">Mijozlar</h2><span class="muted">Ro'yxatdagi keshbek qarzi: <b>${sum(totalCb)}</b></span></div>
     <div class="card"><form id="sf" class="row" style="margin-bottom:10px"><input id="q" class="sp" placeholder="Ism, telefon yoki mashina raqami" value="${esc(S.ctx.q || '')}"><button class="btn">Qidirish</button></form>
     <div class="tbl-wrap"><table><thead><tr><th>Ism</th><th>Telefon</th><th>Mashinalar</th><th class="num">Tashrif</th><th class="num">Xarid</th><th class="num">Keshbek</th></tr></thead><tbody>
-    ${list.map(c => `<tr class="click" data-id="${c.id}"><td>${esc(c.name || '—')}</td><td>${esc(c.phone)}</td><td>${esc(c.plates || '')}</td><td class="num">${c.visits}</td><td class="num">${fmt(c.spent)}</td><td class="num pos"><b>${fmt(c.cashback)}</b></td></tr>`).join('') || '<tr><td colspan="6" class="empty">Topilmadi</td></tr>'}</tbody></table></div></div>`;
+    ${list.map(c => `<tr class="click" data-id="${c.id}"><td>${esc(c.name || '—')}</td><td>${phoneShow(c.phone)}</td><td>${(c.plates || '').split(', ').map(plateFmt).join(', ')}</td><td class="num">${c.visits}</td><td class="num">${fmt(c.spent)}</td><td class="num pos"><b>${fmt(c.cashback)}</b></td></tr>`).join('') || '<tr><td colspan="6" class="empty">Topilmadi</td></tr>'}</tbody></table></div></div>`;
   $('#sf').onsubmit = e => { e.preventDefault(); S.ctx.q = $('#q').value; render(); };
   $$('tr[data-id]').forEach(tr => tr.onclick = safe(() => customerCard(tr.dataset.id)));
 };
@@ -669,7 +841,7 @@ async function customerCard(id) {
     <div class="stat"><div class="label">Keshbek balansi</div><div class="big pos">${sum(c.cashback)}</div></div></div>
     <label class="f"><span>Izoh</span><input id="no" value="${esc(c.note || '')}"></label>
     <div class="row end"><button class="btn" id="adj">Keshbekni qo'lda o'zgartirish</button><button class="btn p" id="sv">Saqlash</button></div>
-    <h3 style="margin-top:14px">Mashinalar</h3><div>${c.cars.map(x => `<span class="tag boshqa" style="font-size:14px;margin-right:6px">${esc(x.plate)} ${esc(x.model)} · ${km(x.last_mileage)}</span>`).join('') || '—'}</div>
+    <h3 style="margin-top:14px">Mashinalar</h3><div>${c.cars.map(x => `<span class="tag boshqa" style="font-size:14px;margin-right:6px">${plateFmt(x.plate)} · ${carDesc(x)} · ${km(x.last_mileage)}</span>`).join('') || '—'}</div>
     <h3 style="margin-top:14px">Xaridlar</h3><div class="tbl-wrap"><table><tbody>${c.orders.map(o => `<tr><td>${dateOf(o.created_at)}</td><td>${esc(o.plate || 'sotuv')}</td><td>${km(o.mileage)}</td><td><span class="tag ${o.status}">${STATUS[o.status]}</span></td><td class="num">${fmt(o.total)}</td><td class="num pos">${o.cashback_earned ? '+' + fmt(o.cashback_earned) : ''}</td></tr>`).join('') || '<tr><td class="empty">Yo\'q</td></tr>'}</tbody></table></div>
     <h3 style="margin-top:14px">Keshbek harakati</h3><table><tbody>${c.cashback_tx.map(t => `<tr><td>${dateOf(t.created_at)}</td><td>${esc(t.kind)}</td><td class="num ${t.amount < 0 ? 'neg' : 'pos'}">${t.amount > 0 ? '+' : ''}${fmt(t.amount)}</td></tr>`).join('') || '<tr><td class="empty">Yo\'q</td></tr>'}</tbody></table>`, { wide: true });
   $('#sv', m.el).onclick = safe(async () => { await PUT('customers/' + id, { name: $('#n', m.el).value, phone: $('#p', m.el).value, note: $('#no', m.el).value }); m.close(); toast('Saqlandi'); render(); });

@@ -51,11 +51,14 @@ CREATE TABLE IF NOT EXISTS customers(
   cashback INTEGER DEFAULT 0, note TEXT DEFAULT '', created_at TEXT);
 CREATE TABLE IF NOT EXISTS cars(
   id INTEGER PRIMARY KEY, plate TEXT UNIQUE NOT NULL, model TEXT DEFAULT '',
-  customer_id INTEGER, last_mileage INTEGER DEFAULT 0, created_at TEXT);
+  customer_id INTEGER, last_mileage INTEGER DEFAULT 0, created_at TEXT,
+  transmission TEXT DEFAULT '', color TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS products(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
   unit TEXT DEFAULT 'dona', cost REAL DEFAULT 0, price INTEGER DEFAULT 0,
-  stock REAL DEFAULT 0, barcode TEXT DEFAULT '', active INTEGER DEFAULT 1);
+  stock REAL DEFAULT 0, barcode TEXT DEFAULT '', active INTEGER DEFAULT 1, kind TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS car_models(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, sort INTEGER DEFAULT 100);
+CREATE TABLE IF NOT EXISTS product_models(product_id INTEGER NOT NULL, model TEXT NOT NULL, PRIMARY KEY(product_id, model));
 CREATE TABLE IF NOT EXISTS orders(
   id INTEGER PRIMARY KEY, type TEXT NOT NULL, car_id INTEGER, customer_id INTEGER,
   mileage INTEGER, next_mileage INTEGER, oil_in REAL, oil_out REAL,
@@ -89,21 +92,29 @@ CREATE INDEX IF NOT EXISTS ix_orders_closed ON orders(closed_at);
 CREATE INDEX IF NOT EXISTS ix_items_order ON order_items(order_id);
 """
 
+# name, category, kind, unit, cost, price, mos mashinalar (namuna — o'zingiznikiga almashtiring)
 SEED_PRODUCTS = [
-    # name, category, unit, cost, price
-    ("Motor moyi 5W-30 (1 L, quyma)", "moy", "litr", 70000, 95000),
-    ("Motor moyi 5W-40 (1 L, quyma)", "moy", "litr", 65000, 90000),
-    ("Motor moyi 10W-40 (1 L, quyma)", "moy", "litr", 45000, 65000),
-    ("Moy filtri (Nexia/Cobalt/Lacetti)", "filtr", "dona", 32000, 30000),
-    ("Havo filtri", "filtr", "dona", 35000, 35000),
-    ("Salon filtri", "filtr", "dona", 30000, 30000),
-    ("Yoqilg'i filtri", "filtr", "dona", 40000, 45000),
-    ("Karobka moyi (1 L)", "moy", "litr", 60000, 85000),
-    ("Antifriz (1 L)", "boshqa", "litr", 18000, 25000),
-    ("Tormoz suyuqligi", "boshqa", "dona", 25000, 35000),
-    ("Salfetka / ochistitel", "boshqa", "dona", 5000, 10000),
-    ("Moy almashtirish xizmati", "xizmat", "dona", 0, 0),
+    ("Motor moyi 5W-30 (1 L, quyma)", "moy", "motor", "litr", 70000, 95000, []),
+    ("Motor moyi 5W-40 (1 L, quyma)", "moy", "motor", "litr", 65000, 90000, []),
+    ("Motor moyi 10W-40 (1 L, quyma)", "moy", "motor", "litr", 45000, 65000, []),
+    ("Karobka moyi (1 L)", "moy", "karobka", "litr", 60000, 85000, []),
+    ("Moy filtri (Cobalt/Nexia 3/Gentra/Lacetti)", "filtr", "moy", "dona", 32000, 30000,
+     ["Cobalt", "Nexia 3", "Gentra", "Lacetti", "Nexia 2"]),
+    ("Moy filtri (Spark/Matiz/Damas)", "filtr", "moy", "dona", 28000, 28000, ["Spark", "Matiz", "Damas", "Labo"]),
+    ("Havo filtri (Cobalt/Nexia 3)", "filtr", "havo", "dona", 35000, 35000, ["Cobalt", "Nexia 3"]),
+    ("Havo filtri (Gentra/Lacetti)", "filtr", "havo", "dona", 38000, 38000, ["Gentra", "Lacetti"]),
+    ("Salon filtri (Cobalt/Nexia 3)", "filtr", "salon", "dona", 30000, 30000, ["Cobalt", "Nexia 3"]),
+    ("Salon filtri (Gentra/Lacetti)", "filtr", "salon", "dona", 30000, 30000, ["Gentra", "Lacetti"]),
+    ("Yoqilg'i filtri", "filtr", "yoqilgi", "dona", 40000, 45000, []),
+    ("Antifriz (1 L)", "boshqa", "", "litr", 18000, 25000, []),
+    ("Tormoz suyuqligi", "boshqa", "", "dona", 25000, 35000, []),
+    ("Salfetka / ochistitel", "boshqa", "", "dona", 5000, 10000, []),
+    ("Moy almashtirish xizmati", "xizmat", "", "dona", 0, 0, []),
 ]
+
+CAR_MODELS = ["Cobalt", "Nexia 3", "Gentra", "Lacetti", "Spark", "Damas", "Matiz", "Nexia 2", "Malibu",
+              "Tracker", "Onix", "Captiva", "Labo", "Monza", "Equinox", "Kia K5", "Hyundai Elantra",
+              "BYD Chazor", "BYD Song Plus", "Chery Tiggo", "Haval", "Jetour"]
 
 SEED_EMPLOYEES = [
     ("Usta 1", "usta"), ("Usta 2", "usta"),
@@ -149,14 +160,29 @@ def init_db():
     CON.executescript(SCHEMA)
     for k, v in DEFAULT_SETTINGS.items():
         CON.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)", (k, v))
+    migrate()
     if not CON.execute("SELECT 1 FROM products LIMIT 1").fetchone():
-        for n, c, u, cost, price in SEED_PRODUCTS:
-            CON.execute("INSERT INTO products(name,category,unit,cost,price,stock) VALUES(?,?,?,?,?,?)",
-                        (n, c, u, cost, price, 0 if c == "xizmat" else 50))
+        for n, c, k, u, cost, price, models in SEED_PRODUCTS:
+            pid = CON.execute("INSERT INTO products(name,category,kind,unit,cost,price,stock) VALUES(?,?,?,?,?,?,?)",
+                              (n, c, k, u, cost, price, 0 if c == "xizmat" else 50)).lastrowid
+            for m in models:
+                CON.execute("INSERT OR IGNORE INTO product_models(product_id,model) VALUES(?,?)", (pid, m))
+    if not CON.execute("SELECT 1 FROM car_models LIMIT 1").fetchone():
+        for i, m in enumerate(CAR_MODELS):
+            CON.execute("INSERT OR IGNORE INTO car_models(name,sort) VALUES(?,?)", (m, i))
     if not CON.execute("SELECT 1 FROM employees LIMIT 1").fetchone():
         for n, r in SEED_EMPLOYEES:
             CON.execute("INSERT INTO employees(name,role) VALUES(?,?)", (n, r))
     CON.commit()
+
+
+def migrate():
+    """Eski bazaga yangi ustunlarni qo'shadi."""
+    for table, col, ddl in (("cars", "transmission", "TEXT DEFAULT ''"), ("cars", "color", "TEXT DEFAULT ''"),
+                            ("products", "kind", "TEXT DEFAULT ''")):
+        cols = {r[1] for r in CON.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            CON.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
 
 
 def rows(sql, args=()):
@@ -190,7 +216,7 @@ def get_or_create_customer(name, phone):
     if phone:
         c = row("SELECT * FROM customers WHERE phone=?", (phone,))
         if c:
-            if name and not c["name"]:
+            if name and name != c["name"]:
                 CON.execute("UPDATE customers SET name=? WHERE id=?", (name, c["id"]))
             return c["id"]
     if not name and not phone:
@@ -222,15 +248,34 @@ def api_car_lookup(q):
     return {"plate": plate, "car": car_full(car["id"]) if car else None}
 
 
+def clean_car_fields(b):
+    model = (b.get("model") or "").strip()
+    tr = (b.get("transmission") or "").upper()
+    if tr not in ("", "AT", "MT"):
+        raise ApiError("Uzatmalar qutisi A/T yoki M/T bo'lishi kerak")
+    if model:
+        CON.execute("INSERT OR IGNORE INTO car_models(name,sort) VALUES(?,1000)", (model,))
+    return model, tr, (b.get("color") or "").strip()
+
+
+def require_phone(b):
+    phone = norm_phone(b.get("phone"))
+    if not re.fullmatch(r"998\d{9}", phone):
+        raise ApiError("Mijoz telefon raqamini to'liq kiriting (+998 XX XXX XX XX)")
+    return phone
+
+
 def api_car_create(b):
     plate = norm_plate(b.get("plate"))
     if len(plate) < 4:
         raise ApiError("Mashina raqami noto'g'ri")
     if row("SELECT 1 FROM cars WHERE plate=?", (plate,)):
         raise ApiError("Bu raqam bazada bor")
-    cid = get_or_create_customer((b.get("customer_name") or "").strip(), b.get("phone"))
-    cur = CON.execute("INSERT INTO cars(plate,model,customer_id,created_at) VALUES(?,?,?,?)",
-                      (plate, (b.get("model") or "").strip(), cid, now()))
+    phone = require_phone(b)
+    model, tr, color = clean_car_fields(b)
+    cid = get_or_create_customer((b.get("customer_name") or "").strip(), phone)
+    cur = CON.execute("INSERT INTO cars(plate,model,transmission,color,customer_id,created_at) VALUES(?,?,?,?,?,?)",
+                      (plate, model, tr, color, cid, now()))
     return car_full(cur.lastrowid)
 
 
@@ -238,16 +283,22 @@ def api_car_update(car_id, b):
     car = row("SELECT * FROM cars WHERE id=?", (car_id,))
     if not car:
         raise ApiError("Topilmadi", 404)
-    model = b.get("model", car["model"])
+    model, tr, color = clean_car_fields({**car, **b})
     cid = car["customer_id"]
-    if "phone" in b or "customer_name" in b:
+    if "phone" in b:
+        phone = require_phone(b)
         name = (b.get("customer_name") or "").strip()
-        phone = norm_phone(b.get("phone"))
-        if cid and (not phone or norm_phone(row("SELECT phone FROM customers WHERE id=?", (cid,))["phone"]) == phone):
+        same = row("SELECT * FROM customers WHERE phone=?", (phone,))
+        if same:                       # bu raqamli mijoz bor — mashinani unga bog'laymiz
+            cid = same["id"]
+            if name:
+                CON.execute("UPDATE customers SET name=? WHERE id=?", (name, cid))
+        elif cid:                      # raqam xato yozilgan bo'lsa — to'g'rilaymiz
             CON.execute("UPDATE customers SET name=?, phone=? WHERE id=?", (name, phone, cid))
         else:
             cid = get_or_create_customer(name, phone)
-    CON.execute("UPDATE cars SET model=?, customer_id=? WHERE id=?", (model, cid, car_id))
+    CON.execute("UPDATE cars SET model=?, transmission=?, color=?, customer_id=? WHERE id=?",
+                (model, tr, color, cid, car_id))
     return car_full(car_id)
 
 
@@ -284,17 +335,42 @@ def api_product_save(b, pid=None):
     if cat not in ("moy", "filtr", "boshqa", "xizmat"):
         raise ApiError("Kategoriya noto'g'ri")
     vals = (name, cat, b.get("unit") or "dona", float(b.get("cost") or 0),
-            int(float(b.get("price") or 0)), (b.get("barcode") or "").strip(), 1 if b.get("active", 1) else 0)
+            int(float(b.get("price") or 0)), (b.get("barcode") or "").strip(), 1 if b.get("active", 1) else 0,
+            (b.get("kind") or "").strip())
     if pid:
-        CON.execute("UPDATE products SET name=?,category=?,unit=?,cost=?,price=?,barcode=?,active=? WHERE id=?",
+        CON.execute("UPDATE products SET name=?,category=?,unit=?,cost=?,price=?,barcode=?,active=?,kind=? WHERE id=?",
                     vals + (pid,))
     else:
-        cur = CON.execute("INSERT INTO products(name,category,unit,cost,price,barcode,active,stock) VALUES(?,?,?,?,?,?,?,0)",
-                          vals)
+        cur = CON.execute("""INSERT INTO products(name,category,unit,cost,price,barcode,active,kind,stock)
+                             VALUES(?,?,?,?,?,?,?,?,0)""", vals)
         pid = cur.lastrowid
         if float(b.get("stock") or 0):
             move_stock(pid, float(b["stock"]), "prixod", "boshlang'ich", float(b.get("cost") or 0))
-    return row("SELECT * FROM products WHERE id=?", (pid,))
+    if "models" in b:
+        CON.execute("DELETE FROM product_models WHERE product_id=?", (pid,))
+        for m in b["models"] or []:
+            if str(m).strip():
+                CON.execute("INSERT OR IGNORE INTO product_models(product_id,model) VALUES(?,?)", (pid, str(m).strip()))
+    return products_full(pid)[0]
+
+
+def products_full(pid=None):
+    ps = rows("SELECT * FROM products" + (" WHERE id=?" if pid else "") + " ORDER BY category, kind, name",
+              (pid,) if pid else ())
+    pm = {}
+    for r in rows("SELECT * FROM product_models"):
+        pm.setdefault(r["product_id"], []).append(r["model"])
+    for p in ps:
+        p["models"] = sorted(pm.get(p["id"], []))
+    return ps
+
+
+def api_product_add_model(pid, b):
+    model = (b.get("model") or "").strip()
+    if not model or not row("SELECT 1 FROM products WHERE id=?", (pid,)):
+        raise ApiError("Model yoki mahsulot noto'g'ri")
+    CON.execute("INSERT OR IGNORE INTO product_models(product_id,model) VALUES(?,?)", (pid, model))
+    return products_full(pid)[0]
 
 
 def move_stock(pid, qty, kind, ref, cost=None):
@@ -331,7 +407,7 @@ def api_purchase(b):
 # ---------------------------------------------------------------- orders
 
 def load_order(oid):
-    o = row("""SELECT o.*, cars.plate, cars.model, cu.name AS customer_name, cu.phone AS customer_phone,
+    o = row("""SELECT o.*, cars.plate, cars.model, cars.transmission, cars.color, cu.name AS customer_name, cu.phone AS customer_phone,
                cu.cashback AS customer_cashback,
                m.name AS master_name, s.name AS seller_name, k.name AS cashier_name
                FROM orders o LEFT JOIN cars ON cars.id=o.car_id
@@ -386,6 +462,9 @@ def api_order_create(b):
             raise ApiError("Probegni kiriting")
         car = row("SELECT * FROM cars WHERE id=?", (car_id,))
         customer_id = car["customer_id"]
+        cust = row("SELECT * FROM customers WHERE id=?", (customer_id,)) if customer_id else None
+        if not cust or not cust["phone"]:
+            raise ApiError("Avval mijozni kiriting — telefon raqami majburiy")
         if car["last_mileage"] and mileage < car["last_mileage"] and not b.get("force"):
             raise ApiError(f"Probeg avvalgidan ({car['last_mileage']:,} km) kam. Tekshiring.".replace(",", " "))
     elif b.get("phone") or b.get("customer_name"):
@@ -701,7 +780,8 @@ def api_bootstrap():
     return {
         "settings": public_settings(),
         "employees": rows("SELECT * FROM employees ORDER BY role, name"),
-        "products": rows("SELECT * FROM products ORDER BY category, name"),
+        "products": products_full(),
+        "car_models": rows("SELECT * FROM car_models ORDER BY sort, name"),
         "version": VERSION["v"],
     }
 
@@ -832,9 +912,13 @@ def route(method, path, q, b):
             CON.execute("INSERT INTO cashback_tx(customer_id,amount,kind,created_at) VALUES(?,?,?,?)",
                         (rid, amt, "qo'lda", now()))
             return api_customer(rid)
+    if head == "car_models":
+        return rows("SELECT * FROM car_models ORDER BY sort, name")
     if head == "products":
         if method == "GET":
-            return rows("SELECT * FROM products ORDER BY category, name")
+            return products_full()
+        if method == "POST" and rid and action == "models":
+            return api_product_add_model(rid, b)
         if method == "POST":
             return api_product_save(b)
         if method == "PUT" and rid:
