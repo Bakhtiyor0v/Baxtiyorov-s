@@ -451,3 +451,8 @@ body.posmode .demo-bar{display:none}
 @media (max-width:900px){body.ks .demo-bar{margin-left:0}}
 .chart .tip{transform:translate(-50%,-100%)}
 .sb-pos{padding-right:44px}
+@media (max-width:900px){
+  .pos-rail{order:-2}
+  .pos-cart{order:-1;border-bottom:1px solid var(--line)}
+  .cart-lines{max-height:40vh}
+}
