@@ -70,7 +70,7 @@ async function api(method, path, body) {
   return data;
 }
 const GET = p => api('GET', p), POST = (p, b) => api('POST', p, b || {}), PUT = (p, b) => api('PUT', p, b || {});
-function setNet(ok) { $('#net').classList.toggle('off', !ok); }
+function setNet(ok) { $$('#net, .netdot').forEach(d => d.classList.toggle('off', !ok)); }
 
 // Har bir tugma bosilishini xatoliklardan himoya qiladi
 const focusLater = (el) => setTimeout(() => { if (el && (!document.activeElement || document.activeElement === document.body)) el.focus(); }, 50);
@@ -174,12 +174,11 @@ const itemsFromOrder = o => o.items.map(i => ({ product_id: i.product_id, name: 
 const orderLine = o => o.items.map(i => `${esc(i.name)} ×${qtyFmt(i.qty)}${i.is_bonus ? ' <span class="tag bonus">bonus</span>' : ''}`).join(', ');
 
 // ------------------------------------------------------------------ ishga tushirish
+// Bitta kirish: kim login-parol tersa — o'shanga mos bo'limga o'tadi
+// (zamena sotuvchisi → planshet; kassir / rahbar → kassa paneli).
 async function start() {
-  const path = location.pathname.replace(/\/$/, '');
-  S.mode = window.DEMO_MODE || (path.endsWith('/planshet') ? 'planshet' : path.endsWith('/kassa') ? 'kassa' : null);
-  setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); }, 1000);
-  if (!S.mode) return chooser();
-  document.body.classList.add(S.mode === 'planshet' ? 'pl' : 'ks');
+  const tick = () => { const t = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); $$('#clock, .clock').forEach(el => { el.textContent = t; }); };
+  tick(); setInterval(tick, 1000);
   if (!LS.get('token', '')) return loginView();
   try { await reloadBoot(); } catch (e) {
     if (e.code === 401) return loginView();
@@ -189,38 +188,46 @@ async function start() {
 }
 
 function enter() {
+  const role = S.boot.me.role;
+  S.mode = role === 'sotuvchi' ? 'planshet' : (sessionStorage.getItem('zm_mode') === 'planshet' ? 'planshet' : 'kassa');
+  document.body.classList.toggle('pl', S.mode === 'planshet');
+  document.body.classList.toggle('ks', S.mode === 'kassa');
   document.title = S.mode === 'planshet' ? 'Zamena' : 'Zamena — kassa';
-  userChip();
-  buildTabs();
+  if (S.mode === 'kassa') { $('#tabs').innerHTML = ''; $('#brand').textContent = ''; buildSide(); }
+  else { removeSide(); userChip(); buildTabs(); }
   const tabs = myTabs();
   if (!tabs.length) { $('#app').innerHTML = `<div class="card empty">${esc(S.boot.me.name)}, bu bo'limga kirish huquqingiz yo'q.</div>`; return; }
-  go(tabs[0][0]);
+  go(S.mode === 'kassa' ? 'bosh' : tabs[0][0]);
   if (!S.polling) S.polling = setInterval(poll, 3000);
+  updateBadges();
 }
 
 // Login va parol bilan kirish (2–3 kishi ishlashi mumkin)
 function loginView() {
-  S.boot = null; S.tab = null;
+  S.boot = null; S.tab = null; S.pos = null;
   $$('.modal-bg').forEach(m => m.parentNode.removeChild(m)); S.editing = false;
+  removeSide();
+  document.body.classList.remove('pl', 'ks', 'posmode');
   $('#tabs').innerHTML = '';
-  $('#brand').textContent = S.mode === 'planshet' ? 'Zamena' : 'Zamena — kassa';
+  $('#brand').textContent = 'Zamena';
   $('#app').innerHTML = `<div class="login-wrap"><form class="card login" id="lf" autocomplete="on">
-    <h2>Tizimga kirish</h2>
+    <h2>Tizimga kirish</h2><p class="muted" style="margin-top:-10px">Zamena planshet va kassa — bitta kirish</p>
     <label class="f"><span>Login</span><input id="lg" class="in-xl" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
     <label class="f"><span>Parol</span><input id="pw" class="in-xl" type="password" autocomplete="current-password"></label>
     <button class="btn p xl" style="width:100%">Kirish</button>
-    ${window.DEMO_API ? `<div class="sum-box small" style="margin-top:14px"><b>Demo loginlar</b><br>sotuvchi / 1111 — zamena sotuvchisi<br>admin / 1234 — rahbar (moy rasmlari, bonus filtr)</div>` : ''}
+    ${window.DEMO_API ? `<div class="sum-box small" style="margin-top:14px"><b>Demo loginlar</b><br>sotuvchi / 1111 — zamena sotuvchisi (planshet)<br>kassir / 2222 — kassa (POS, cheklar, mijozlar…)<br>admin / 1234 — rahbar (hammasi + hisobot, oylik)</div>` : ''}
   </form></div>`;
   $('#lf').onsubmit = safe(async e => {
     e.preventDefault();
     const r = await POST('login', { login: $('#lg').value.trim(), password: $('#pw').value });
     LS.set('token', r.token);
+    sessionStorage.removeItem('zm_mode');
     await reloadBoot(); enter();
   });
   focusLater($('#lg'));
 }
 
-// Chap burchakda — kim ishlayapti
+// Chap burchakda — kim ishlayapti (planshet)
 function userChip() {
   const me = S.boot.me;
   $('#brand').innerHTML = `<button class="user-chip" id="uc" type="button" title="${esc(ROLES[me.role] || '')}"><span class="av">${esc(me.name.slice(0, 1).toUpperCase())}</span><span class="un">${esc(me.name)}</span></button>`;
@@ -230,18 +237,10 @@ function userChip() {
   };
 }
 
-function chooser() {
-  $('#tabs').innerHTML = '';
-  $('#app').innerHTML = `<div class="chooser">
-    <a class="card" href="/planshet"><div class="ico">📋</div><h2>Planshet</h2><div class="muted">Zamena sotuvchisi: mashina, probeg, usta, moy</div></a>
-    <a class="card" href="/kassa"><div class="ico">🖥️</div><h2>Kassa</h2><div class="muted">Do'kon kompyuteri: to'lov, sotuv, ombor, hisobot</div></a></div>`;
-}
-
-// [kalit, nomi, kerakli eng past rol]
+// [kalit, nomi, kerakli eng past rol] — kassa menyusi kassa.js da to'ldiriladi
 const TABS = {
-  planshet: [['jarayon', 'Jarayonda'], ['yangi', '＋ Yangi sotuv'], ['mahsulot', 'Moylar', 'admin']],
-  kassa: [['navbat', 'Navbat', 'kassir'], ['sotuv', 'Sotuv', 'kassir'], ['tarix', 'Tarix', 'kassir'], ['mahsulot', 'Ombor', 'kassir'], ['mijoz', 'Mijozlar', 'kassir'],
-    ['inventar', 'Inventarizatsiya', 'kassir'], ['hisobot', 'Hisobot', 'admin'], ['oylik', 'Oylik / KPI', 'admin'], ['xodim', 'Xodimlar', 'admin'], ['sozlama', 'Sozlamalar', 'admin']],
+  planshet: [['jarayon', 'Jarayonda'], ['yangi', '＋ Yangi sotuv'], ['mahsulot', 'Moylar', 'admin'], ['__kassa', 'Kassa ↗', 'kassir']],
+  kassa: [],
 };
 const myTabs = () => TABS[S.mode].filter(t => !t[2] || (RANK[S.boot.me.role] || 0) >= RANK[t[2]]);
 const PARENT = { car: 'yangi', register: 'yangi', order: 'yangi' };
@@ -251,15 +250,17 @@ function buildTabs() {
 }
 
 async function go(tab, ctx) {
+  if (tab === '__kassa') { sessionStorage.setItem('zm_mode', 'kassa'); return enter(); }
   S.tab = tab; S.ctx = ctx || {};
   const on = PARENT[tab] || tab;
-  $$('#tabs [data-t]').forEach(b => b.classList.toggle('on', b.dataset.t === on));
+  $$('#tabs [data-t], #side [data-t]').forEach(b => b.classList.toggle('on', b.dataset.t === on));
   await render();
 }
 async function render() {
   const v = VIEWS[S.tab];
   $('#app').oninput = null;
   KEYH = null;
+  document.body.classList.toggle('posmode', S.tab === 'pos');
   window.scrollTo(0, 0);
   try { await v(); } catch (e) { $('#app').innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
 }
@@ -273,18 +274,26 @@ async function poll() {
       await reloadBoot();
       const active = document.activeElement;
       const typing = active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) && active.value;
-      if (!S.editing && !typing && !S.ctx.form && LIVE.has(S.tab)) render();
+      if (S.tab === 'pos') { posZamenaRefresh(); posShiftChip(); }
+      else if (!S.editing && !typing && !S.ctx.form && LIVE.has(S.tab)) render();
+      if (S.mode === 'kassa') sideShift();
       updateBadges();
     }
   } catch { }
 }
-const LIVE = new Set(['jarayon', 'navbat', 'tarix', 'mahsulot']);
+const LIVE = new Set(['jarayon', 'bosh', 'cheklar', 'mahsulot']);
+let lastOpen = null;
 async function updateBadges() {
   if (S.mode !== 'kassa' || !S.boot || (RANK[S.boot.me.role] || 0) < RANK.kassir) return;
   try {
-    const open = await GET('orders?status=open');
-    const b = $('#b-navbat'); if (b) { b.hidden = !open.length; b.textContent = open.length; }
+    const n = (await GET('orders?status=open')).filter(o => o.type === 'zamena').length;
+    const pos = $('#side .sb-pos'); if (pos) { let b = $('.sbz', pos); if (!b) { b = document.createElement('b'); b.className = 'sbz'; pos.appendChild(b); } b.hidden = !n; b.textContent = n; }
+    if (lastOpen !== null && n > lastOpen) beep();   // planshetdan yangi mashina keldi
+    lastOpen = n;
   } catch { }
+}
+function beep() {
+  try { const a = new (window.AudioContext || window.webkitAudioContext)(); const o = a.createOscillator(); const g = a.createGain(); o.connect(g); g.connect(a.destination); o.frequency.value = 880; g.gain.value = .1; o.start(); setTimeout(() => { o.stop(); a.close(); }, 200); } catch { }
 }
 
 // ================================================================== PLANSHET
@@ -656,511 +665,3 @@ VIEWS.order = async () => {
   });
   drawOil();
 };
-
-// ================================================================== KASSA
-VIEWS.navbat = async () => {
-  const list = await GET('orders?status=open');
-  const seen = new Set(LS.get('seen', []));
-  $('#app').innerHTML = `<div class="row"><h2 class="sp">Navbat — to'lov kutilmoqda (${list.length})</h2><button class="btn p" id="pos">+ Oddiy sotuv</button></div>
-    ${list.length ? `<div class="queue">${list.map(o => `<div class="card qcard ${o.status} ${seen.has(o.id) ? '' : 'new'}" data-id="${o.id}">
-      <div class="row"><span class="plate-t sp">${plateFmt(o.plate)}</span><span class="tag ${o.status}">${STATUS[o.status]}</span></div>
-      <div>${carDesc(o)}</div><div class="muted small">${esc(o.customer_name || '')} ${phoneShow(o.customer_phone)}</div>
-      <div class="small" style="margin:8px 0">${orderLine(o) || '—'}</div>
-      <div class="row small muted"><span>Usta: <b>${esc(o.master_name || '—')}</b></span><span>${km(o.mileage)}</span><span class="sp"></span><span>${timeOf(o.created_at)}</span></div>
-      <div class="row" style="margin-top:8px"><span class="sp muted small">${o.customer_cashback ? 'Keshbek: ' + fmt(o.customer_cashback) : ''}</span><span class="big" style="font-size:22px">${sum(o.subtotal)}</span></div>
-      </div>`).join('')}</div>` : '<div class="card empty">Hozircha navbat bo\'sh. Planshetdan «Almashtirilmoqda» qilinganda shu yerda paydo bo\'ladi.</div>'}`;
-  LS.set('seen', [...new Set([...seen, ...list.map(o => o.id)])].slice(-300));
-  if (list.some(o => !seen.has(o.id))) beep();
-  $('#pos').onclick = () => go('sotuv');
-  $$('.qcard').forEach(c => c.onclick = safe(async () => checkout(await GET('orders/' + c.dataset.id))));
-  updateBadges();
-};
-
-function beep() {
-  try { const a = new (window.AudioContext || window.webkitAudioContext)(); const o = a.createOscillator(); const g = a.createGain(); o.connect(g); g.connect(a.destination); o.frequency.value = 880; g.gain.value = .1; o.start(); setTimeout(() => { o.stop(); a.close(); }, 200); } catch { }
-}
-
-function payBlock(prefix = '') {
-  return `<div class="grid g2">
-    <label class="f"><span>Chegirma (so'm)</span><input id="${prefix}disc" type="number" min="0" step="1000" value="0"></label>
-    <label class="f"><span>Keshbekdan to'lash</span><input id="${prefix}cb" type="number" min="0" step="1000" value="0"></label>
-    <label class="f"><span>Naqd</span><input id="${prefix}cash" type="number" min="0" step="1000"></label>
-    <label class="f"><span>Karta / Click / Payme</span><input id="${prefix}card" type="number" min="0" step="1000"></label>
-    </div>
-    <div class="sum-box"><div class="line"><span>Mahsulotlar</span><b id="${prefix}s-sub">0</b></div>
-      <div class="line"><span>Chegirma</span><b id="${prefix}s-disc">0</b></div><div class="line"><span>Keshbekdan</span><b id="${prefix}s-cb">0</b></div>
-      <div class="line tot"><span>To'lash kerak</span><span id="${prefix}s-tot">0</span></div>
-      <div class="line small muted"><span>Mijozga keshbek tushadi (${S.boot.settings.cashback_percent}%)</span><span id="${prefix}s-earn">0</span></div></div>`;
-}
-function payCalc(el, subtotal, cbMax, hasCustomer) {
-  const disc = Math.min(+$('#disc', el).value || 0, subtotal);
-  const cbIn = $('#cb', el); if (+cbIn.value > cbMax) cbIn.value = cbMax;
-  const cb = Math.min(+cbIn.value || 0, subtotal - disc);
-  const tot = subtotal - disc - cb;
-  $('#s-sub', el).textContent = fmt(subtotal); $('#s-disc', el).textContent = '−' + fmt(disc); $('#s-cb', el).textContent = '−' + fmt(cb);
-  $('#s-tot', el).textContent = sum(tot);
-  $('#s-earn', el).textContent = hasCustomer ? '+' + fmt(Math.floor(tot * (+S.boot.settings.cashback_percent || 0) / 100)) : 'mijoz yo\'q';
-  return { disc, cb, tot };
-}
-function payPayload(el, tot) {
-  let cash = $('#cash', el).value, card = $('#card', el).value;
-  if (cash === '' && card === '') cash = tot;
-  else if (cash === '') cash = tot - (+card || 0);
-  else if (card === '') card = tot - (+cash || 0);
-  return { discount: +$('#disc', el).value || 0, cashback_used: +$('#cb', el).value || 0, paid_cash: +cash || 0, paid_card: +card || 0 };
-}
-
-function checkout(o) {
-  const items = itemsFromOrder(o);
-  const m = modal(`To'lov: ${o.plate} — #${o.id}`, `
-    <div class="row muted small" style="margin-bottom:8px"><span>${carDesc(o)}</span><span>Mijoz: <b>${esc(o.customer_name || '—')}</b> ${o.customer_phone ? phoneShow(o.customer_phone) : ''}</span>
-      <span>Usta: <b>${esc(o.master_name || '—')}</b></span><span>Probeg: ${km(o.mileage)}</span>${o.oil_in ? `<span>Quyildi ${qtyFmt(o.oil_in)} L</span>` : ''}</div>
-    ${o.services.length ? `<div class="chips small" style="margin-bottom:8px">${o.services.map(s => `<span class="tag xizmat">${esc(s)}</span>`).join('')}</div>` : ''}
-    <div class="row"><h3 class="sp">Mahsulotlar</h3><button class="btn sm" id="add">+ Qo'shish</button></div><div id="it"></div>
-    <div class="muted small" style="margin:6px 0 12px">Mijoz keshbeki: <b class="pos">${sum(o.customer_cashback || 0)}</b></div>
-    ${payBlock()}
-    <div class="row" style="margin-top:14px"><button class="btn bad" id="cnl">Bekor qilish</button><span class="sp"></span>
-      <button class="btn" id="sv">Faqat saqlash</button><button class="btn ok lg" id="pay">To'landi ✓</button></div>`, { wide: true });
-  let subtotal = o.subtotal;
-  const recalc = () => payCalc(m.el, subtotal, o.customer_cashback || 0, !!o.customer_id);
-  const ed = itemsEditor($('#it', m.el), items, t => { subtotal = t; recalc(); }, { showCost: true });
-  m.el.addEventListener('input', e => { if (['disc', 'cb'].includes(e.target.id)) recalc(); });
-  $('#add', m.el).onclick = () => pickProduct(p => ed.add(p));
-  const saveItems = () => PUT('orders/' + o.id, { items: itemsPayload(items) });
-  $('#sv', m.el).onclick = safe(async () => { await saveItems(); m.close(); toast('Saqlandi'); render(); });
-  $('#cnl', m.el).onclick = safe(async () => { if (await confirmBox('Zakaz bekor qilinsinmi?')) { await POST(`orders/${o.id}/cancel`); m.close(); render(); } });
-  $('#pay', m.el).onclick = safe(async () => {
-    await saveItems();
-    const { tot } = recalc();
-    const closed = await POST(`orders/${o.id}/close`, payPayload(m.el, tot));
-    m.close(); toast(`To'landi: ${sum(closed.total)}${closed.cashback_earned ? ' · keshbek +' + fmt(closed.cashback_earned) : ''}`);
-    offerReceipt(closed); render();
-  });
-}
-
-function offerReceipt(o) {
-  const m = modal('Tayyor', `<p>Zakaz #${o.id} yopildi. Jami: <b>${sum(o.total)}</b></p><div class="row end"><button class="btn" data-c>Yopish</button><button class="btn p" data-p>Chek chiqarish</button></div>`);
-  $('[data-c]', m.el).onclick = m.close;
-  $('[data-p]', m.el).onclick = () => { printReceipt(o); m.close(); };
-}
-function printReceipt(o) {
-  let r = $('#receipt'); if (!r) { r = document.createElement('div'); r.id = 'receipt'; document.body.appendChild(r); }
-  r.innerHTML = `<div style="text-align:center"><b>${esc(S.boot.settings.shop_name)}</b><br>${dateOf(o.closed_at)} ${timeOf(o.closed_at)} · #${o.id}</div>
-    ${o.plate ? `<div>Mashina: ${plateFmt(o.plate)} ${esc(o.model || '')} · ${km(o.mileage)}</div><div>Keyingi almashtirish: ${km(o.next_mileage)}</div>` : ''}<hr>
-    ${o.items.map(i => `<div>${esc(i.name)}<br>&nbsp; ${qtyFmt(i.qty)} × ${fmt(i.price)} = ${i.is_bonus ? 'BONUS' : fmt(i.qty * i.price)}</div>`).join('')}<hr>
-    ${o.discount ? `<div>Chegirma: −${fmt(o.discount)}</div>` : ''}${o.cashback_used ? `<div>Keshbekdan: −${fmt(o.cashback_used)}</div>` : ''}
-    <div><b>JAMI: ${fmt(o.total)} so'm</b></div>${o.cashback_earned ? `<div>Keshbek: +${fmt(o.cashback_earned)} (balans ${fmt(o.customer_cashback)})</div>` : ''}
-    <div style="text-align:center">Rahmat!</div>`;
-  window.print();
-}
-
-VIEWS.sotuv = async () => {
-  const items = [];
-  let customer = null;
-  $('#app').innerHTML = `<div class="grid g2" style="grid-template-columns:3fr 2fr">
-    <div class="card"><div class="row"><h3 class="sp">Oddiy sotuv</h3><button class="btn p" id="add">+ Mahsulot</button></div>
-      <input id="bc" placeholder="Shtrix-kod skaner yoki nom bilan qidirish (Enter)" style="margin-bottom:10px"><div id="it"></div></div>
-    <div class="card"><h3>Mijoz (ixtiyoriy — keshbek uchun)</h3>
-      <div class="row"><input id="ph" class="sp" type="tel" placeholder="Telefon yoki mashina raqami"><button class="btn" id="find">Topish</button></div>
-      <div id="cinfo" class="small muted" style="margin:8px 0 12px">Mijozsiz sotuv</div>${payBlock()}
-      <button class="btn ok lg" id="pay" style="width:100%;margin-top:12px">To'landi ✓</button></div></div>`;
-  let subtotal = 0;
-  const recalc = () => payCalc($('#app'), subtotal, customer?.cashback || 0, !!customer);
-  const ed = itemsEditor($('#it'), items, t => { subtotal = t; recalc(); }, { showCost: true });
-  $('#app').oninput = e => { if (['disc', 'cb'].includes(e.target.id)) recalc(); };
-  $('#add').onclick = () => pickProduct(p => ed.add(p));
-  $('#bc').onkeydown = e => {
-    if (e.key !== 'Enter') return; const q = e.target.value.trim(); if (!q) return;
-    const exact = S.boot.products.find(p => p.active && p.barcode && p.barcode === q);
-    if (exact) { ed.add(exact); e.target.value = ''; return; }
-    const hits = S.boot.products.filter(p => p.active && p.name.toLowerCase().includes(q.toLowerCase()));
-    if (hits.length === 1) { ed.add(hits[0]); e.target.value = ''; } else pickProduct(p => { ed.add(p); e.target.value = ''; });
-  };
-  $('#find').onclick = safe(async () => {
-    const q = $('#ph').value.trim(); if (!q) return;
-    const list = await GET('customers?q=' + encodeURIComponent(q.replace(/^\+?998/, '')));
-    if (!list.length) { customer = { new: true, phone: q, cashback: 0 }; $('#cinfo').innerHTML = `Yangi mijoz sifatida saqlanadi: <b>${esc(q)}</b>`; }
-    else { customer = list[0]; $('#cinfo').innerHTML = `<b>${esc(customer.name || '—')}</b> ${phoneShow(customer.phone)} · ${(customer.plates || '').split(', ').map(plateFmt).join(', ')}<br>Keshbek: <b class="pos">${sum(customer.cashback)}</b>`; }
-    recalc();
-  });
-  $('#pay').onclick = safe(async () => {
-    if (!items.length) throw new Error('Mahsulot qo\'shing');
-    const { tot } = recalc();
-    const body = { type: 'sotuv', items: itemsPayload(items), close: payPayload($('#app'), tot) };
-    if (customer?.new) body.phone = customer.phone; else if (customer) body.customer_id = customer.id;
-    const o = await POST('orders', body);
-    toast(`Sotildi: ${sum(o.total)}`); offerReceipt(o); render();
-  });
-  recalc(); $('#bc').focus();
-};
-
-function periodBar(id, def = 'month') {
-  const d = new Date(), y = d.getFullYear(), mo = d.getMonth();
-  const presets = {
-    today: ['Bugun', today(), today()],
-    h1: ['1–15', ymd(new Date(y, mo, 1)), ymd(new Date(y, mo, 15))],
-    h2: ['16–oxiri', ymd(new Date(y, mo, 16)), ymd(new Date(y, mo + 1, 0))],
-    month: ['Shu oy', ymd(new Date(y, mo, 1)), ymd(new Date(y, mo + 1, 0))],
-    ph1: ["O'tgan oy 1–15", ymd(new Date(y, mo - 1, 1)), ymd(new Date(y, mo - 1, 15))],
-    ph2: ["O'tgan oy 16–oxiri", ymd(new Date(y, mo - 1, 16)), ymd(new Date(y, mo, 0))],
-    pmonth: ["O'tgan oy", ymd(new Date(y, mo - 1, 1)), ymd(new Date(y, mo, 0))],
-  };
-  const cur = S.ctx[id] || { from: presets[def][1], to: presets[def][2] };
-  S.ctx[id] = cur;
-  const html = `<div class="card row"><div class="chips">${Object.entries(presets).map(([k, [n, f, t]]) => `<span class="chip ${cur.from === f && cur.to === t ? 'on' : ''}" data-f="${f}" data-t="${t}">${n}</span>`).join('')}</div>
-    <span class="sp"></span><input type="date" id="pf" value="${cur.from}" style="width:auto"><span>—</span><input type="date" id="pt" value="${cur.to}" style="width:auto"></div>`;
-  const bind = () => {
-    $$('[data-f]').forEach(c => c.onclick = () => { S.ctx[id] = { from: c.dataset.f, to: c.dataset.t }; render(); });
-    $('#pf').onchange = $('#pt').onchange = () => { S.ctx[id] = { from: $('#pf').value, to: $('#pt').value }; render(); };
-  };
-  return { html, bind, q: `from=${cur.from}&to=${cur.to}`, ...cur };
-}
-
-VIEWS.tarix = async () => {
-  const pb = periodBar('tarixP', 'today');
-  const list = await GET('orders?status=yopilgan&' + pb.q);
-  const tot = list.reduce((a, o) => a + o.total, 0);
-  $('#app').innerHTML = `${pb.html}<div class="card"><h3>Yopilgan zakazlar: ${list.length} ta · ${sum(tot)}</h3>
-    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Vaqt</th><th>Turi</th><th>Raqam / mijoz</th><th>Usta</th><th>Tarkib</th><th class="num">Naqd</th><th class="num">Karta</th><th class="num">Jami</th><th class="num">Foyda</th><th></th></tr></thead><tbody>
-    ${list.map(o => `<tr><td>${o.id}</td><td>${dateOf(o.closed_at)} ${timeOf(o.closed_at)}</td><td>${o.type === 'zamena' ? 'Zamena' : 'Sotuv'}</td>
-      <td><b>${plateFmt(o.plate || '')}</b> ${esc(o.customer_name || '')}</td><td>${esc(o.master_name || '')}</td><td class="small">${orderLine(o)}</td>
-      <td class="num">${fmt(o.paid_cash)}</td><td class="num">${fmt(o.paid_card)}</td><td class="num"><b>${fmt(o.total)}</b></td>
-      <td class="num ${o.total - o.cost < 0 ? 'neg' : 'pos'}">${fmt(o.total - o.cost)}</td><td><button class="btn sm" data-pr="${o.id}">Chek</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Yo\'q</div>'}</div>`;
-  pb.bind();
-  $$('[data-pr]').forEach(b => b.onclick = safe(async () => printReceipt(await GET('orders/' + b.dataset.pr))));
-};
-
-VIEWS.mahsulot = async () => {
-  const ps = S.boot.products;
-  const f = S.ctx.cat || '';
-  const val = ps.filter(p => p.category !== 'xizmat').reduce((a, p) => a + Math.max(p.stock, 0) * p.cost, 0);
-  $('#app').innerHTML = `<div class="row"><h2 class="sp">Ombor · qoldiq tannarxi ${sum(val)}</h2>
-    <button class="btn" id="moves">Harakatlar</button><button class="btn" id="pur">+ Prixod (kirim)</button><button class="btn p" id="new">+ Yangi mahsulot</button></div>
-    <div class="card"><div class="row" style="margin-bottom:10px"><div class="chips">${[['', 'Hammasi'], ...Object.entries(CATS)].map(([k, v]) => `<span class="chip ${k === f ? 'on' : ''}" data-c="${k}">${v}</span>`).join('')}</div>
-      <span class="sp"></span><input id="q" placeholder="Qidirish" style="max-width:260px" value="${esc(S.ctx.q || '')}"></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Nomi</th><th>Kategoriya</th><th class="num">Qoldiq</th><th class="num">Tannarx</th><th class="num">Narx</th><th class="num">Ustama</th><th></th></tr></thead><tbody id="tb"></tbody></table></div></div>`;
-  const draw = () => {
-    const q = $('#q').value.toLowerCase();
-    $('#tb').innerHTML = ps.filter(p => (!f || p.category === f) && (!q || p.name.toLowerCase().includes(q))).map(p => {
-      const mg = p.price - p.cost;
-      return `<tr class="click" data-id="${p.id}" style="${p.active ? '' : 'opacity:.5'}"><td><div class="row" style="flex-wrap:nowrap">${p.category === 'moy' ? oilImg(p, 'sm') : ''}<div>${esc(p.name)}${p.grade ? ` <span class="tag moy">${esc(p.grade)}</span>` : ''}${(p.bonus_kinds || []).length ? ' <span class="tag bonus">🎁 bonus filtr</span>' : ''}${p.barcode ? `<div class="muted small">${esc(p.barcode)}</div>` : ''}${p.models?.length ? `<div class="muted small">Mos: ${esc(p.models.join(', '))}</div>` : ''}</div></div></td>
-      <td><span class="tag ${p.category}">${CATS[p.category]}</span></td><td class="num ${p.stock <= 0 && p.category !== 'xizmat' ? 'neg' : ''}">${p.category === 'xizmat' ? '—' : qtyFmt(p.stock) + ' ' + esc(p.unit)}</td>
-      <td class="num">${fmt(p.cost)}</td><td class="num"><b>${fmt(p.price)}</b></td><td class="num ${mg < 0 ? 'neg' : 'pos'}">${fmt(mg)}</td><td class="num">›</td></tr>`;
-    }).join('');
-  };
-  draw();
-  $('#q').oninput = () => { S.ctx.q = $('#q').value; draw(); };
-  $$('[data-c]').forEach(c => c.onclick = () => { S.ctx.cat = c.dataset.c; render(); });
-  $('#tb').onclick = e => { const tr = e.target.closest('tr'); if (tr) productForm(prod(tr.dataset.id)); };
-  $('#new').onclick = () => productForm(null);
-  $('#pur').onclick = purchaseForm;
-  $('#moves').onclick = safe(async () => {
-    const mv = await GET('stock_moves');
-    modal('Ombor harakatlari', `<div class="tbl-wrap"><table><thead><tr><th>Sana</th><th>Mahsulot</th><th>Turi</th><th class="num">Miqdor</th><th>Asos</th></tr></thead><tbody>
-      ${mv.map(x => `<tr><td>${dateOf(x.created_at)} ${timeOf(x.created_at)}</td><td>${esc(x.name)}</td><td>${esc(x.kind)}</td><td class="num ${x.qty < 0 ? 'neg' : 'pos'}">${x.qty > 0 ? '+' : ''}${qtyFmt(x.qty)} ${esc(x.unit)}</td><td class="small">${esc(x.ref)}</td></tr>`).join('')}</tbody></table></div>`, { wide: true });
-  });
-};
-
-// Rasmni planshet/telefon uchun kichraytiradi (JPEG, eng uzun tomoni 600px)
-function readImage(file, max = 600) {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onerror = () => reject(new Error("Faylni o'qib bo'lmadi"));
-    fr.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error("Bu rasmni o'qib bo'lmadi (JPG yoki PNG tanlang)"));
-      img.onload = () => {
-        const k = Math.min(1, max / Math.max(img.width, img.height));
-        const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
-        const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
-        resolve(c.toDataURL('image/jpeg', 0.82));
-      };
-      img.src = fr.result;
-    };
-    fr.readAsDataURL(file);
-  });
-}
-
-function productForm(p) {
-  const sel = new Set(p?.models || []);
-  const bonus = new Set(p?.bonus_kinds || []);
-  let image; // undefined — o'zgarmagan, '' — o'chirilgan, data: — yangi rasm
-  const m = modal(p ? 'Mahsulot' : 'Yangi mahsulot', `
-    <div class="pform"><div class="pimg"><div id="pv"></div>
-        <label class="btn sm" style="display:inline-flex;align-items:center;margin-top:8px">📷 Rasm yuklash<input id="img" type="file" accept="image/*" hidden></label>
-        <button class="btn sm bad" id="rmimg" type="button" style="margin-top:8px">O'chirish</button></div>
-      <div class="sp" style="min-width:0">
-        <label class="f"><span>Nomi (firma va turi bilan, masalan «Mobil Super 3000 5W-40»)</span><input id="n" value="${esc(p?.name || '')}"></label>
-        <div class="grid g3"><label class="f"><span>Kategoriya</span><select id="c">${Object.entries(CATS).map(([k, v]) => `<option value="${k}" ${p?.category === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-        <label class="f"><span>Turi</span><select id="k"></select></label>
-        <label class="f" id="gwrap"><span>Yopishqoqlik</span><input id="gr" list="grades" placeholder="5W-30" value="${esc(p?.grade || '')}"></label>
-        <label class="f"><span>O'lchov</span><select id="u">${['dona', 'litr', 'komplekt'].map(u => `<option ${p?.unit === u ? 'selected' : ''}>${u}</option>`).join('')}</select></label>
-        <label class="f"><span>Tannarx (kelish narxi)</span><input id="co" type="number" value="${p?.cost ?? ''}"></label>
-        <label class="f"><span>Sotuv narxi${p?.unit === 'litr' ? ' (1 litr)' : ''}</span><input id="pr" type="number" value="${p?.price ?? ''}"></label>
-        <label class="f"><span>Shtrix-kod</span><input id="b" value="${esc(p?.barcode || '')}"></label>
-        ${p ? `<label class="f"><span>Holat</span><select id="a"><option value="1">Faol</option><option value="0" ${p.active ? '' : 'selected'}>Arxiv</option></select></label>` : `<label class="f"><span>Boshlang'ich qoldiq</span><input id="st" type="number" value="0"></label>`}</div>
-      </div></div>
-    <datalist id="grades">${['0W-20', '0W-30', '5W-20', '5W-30', '5W-40', '10W-30', '10W-40', '15W-40', '20W-50'].map(x => `<option>${x}</option>`).join('')}</datalist>
-    <div id="bwrap" class="sum-box" style="margin-bottom:12px"><b>🎁 Shu moy bilan tekin beriladigan filtr</b>
-      <div class="chips" id="bk" style="margin-top:10px"></div>
-      <p class="small muted">Belgilansa, planshetda shu moy tanlanganda o'sha filtrdan 1 tasi avtomatik «bonus» (tekin) bo'ladi. Tannarxi moy foydasidan qoplanadi.</p></div>
-    <div id="mwrap" class="sum-box" style="margin-bottom:12px"><div class="row"><b class="sp">Qaysi mashinalarga mos</b><input id="nmod" placeholder="+ boshqa model (Enter)" style="max-width:240px"></div>
-      <div class="chips" id="mods" style="margin-top:10px"></div>
-      <p class="small muted">Chevrolet va Damas uchun planshetda faqat shu belgilangan filtrlar chiqadi (2–3 firma bo'lishi mumkin). Xitoy mashinalarida sotuvchi filtrni qo'lda tanlaydi.</p></div>
-    <div class="row end"><button class="btn p" id="sv" type="button">Saqlash</button></div>`, { wide: true });
-  const preview = () => {
-    const src = image === undefined ? p?.image_url : image;
-    $('#pv', m.el).innerHTML = src ? `<img class="oimg xl" src="${esc(src)}" alt="">` : `<span class="oimg ph xl"><b>Rasm yo'q</b></span>`;
-    $('#rmimg', m.el).hidden = !src;
-  };
-  const kindSel = () => {
-    const c = $('#c', m.el).value, ks = KINDS[c] || [];
-    const cur = $('#k', m.el).value || p?.kind || '';
-    $('#k', m.el).innerHTML = `<option value="">—</option>` + ks.map(([k, v]) => `<option value="${k}" ${cur === k ? 'selected' : ''}>${v}</option>`).join('');
-    $('#k', m.el).disabled = !ks.length;
-    const motor = c === 'moy' && $('#k', m.el).value !== 'karobka';
-    $('#gwrap', m.el).hidden = !motor;
-    $('#bwrap', m.el).hidden = !motor;
-    $('#mwrap', m.el).hidden = c !== 'filtr';
-  };
-  const drawChips = () => {
-    const names = [...new Set([...S.boot.car_models.map(x => x.name), ...sel])];
-    $('#mods', m.el).innerHTML = names.map(n => `<span class="chip ${sel.has(n) ? 'on' : ''}" data-m="${esc(n)}">${esc(n)}</span>`).join('');
-    $('#bk', m.el).innerHTML = FILTERS.map(([k, v]) => `<span class="chip ${bonus.has(k) ? 'on' : ''}" data-bk="${k}">${bonus.has(k) ? '✓ ' : ''}${v}</span>`).join('');
-  };
-  $('#c', m.el).onchange = kindSel; $('#k', m.el).onchange = kindSel;
-  $('#mods', m.el).onclick = e => { const c = e.target.closest('[data-m]'); if (!c) return; const n = c.dataset.m; sel.has(n) ? sel.delete(n) : sel.add(n); drawChips(); };
-  $('#bk', m.el).onclick = e => { const c = e.target.closest('[data-bk]'); if (!c) return; const k = c.dataset.bk; bonus.has(k) ? bonus.delete(k) : bonus.add(k); drawChips(); };
-  $('#nmod', m.el).onkeydown = e => { if (e.key !== 'Enter') return; const v = e.target.value.trim(); if (v) { sel.add(v); e.target.value = ''; drawChips(); } };
-  $('#img', m.el).onchange = safe(async e => { const f = e.target.files[0]; if (!f) return; image = await readImage(f); preview(); });
-  $('#rmimg', m.el).onclick = () => { image = ''; preview(); };
-  kindSel(); drawChips(); preview();
-  $('#sv', m.el).onclick = safe(async () => {
-    const cat = $('#c', m.el).value, kind = $('#k', m.el).value;
-    const motor = cat === 'moy' && kind !== 'karobka';
-    const b = { name: $('#n', m.el).value, category: cat, kind, unit: $('#u', m.el).value, barcode: $('#b', m.el).value, cost: $('#co', m.el).value, price: $('#pr', m.el).value,
-      active: p ? +$('#a', m.el).value : 1, stock: p ? undefined : $('#st', m.el).value, models: cat === 'filtr' ? [...sel] : [],
-      grade: motor ? $('#gr', m.el).value : '', bonus_kinds: motor ? [...bonus] : [] };
-    if (image !== undefined) b.image = image;
-    if (cat === 'filtr' && !kind) throw new Error("Filtr turini tanlang (moy / havo / salon / reduktor / yoqilg'i)");
-    p ? await PUT('products/' + p.id, b) : await POST('products', b);
-    await reloadBoot(); m.close(); toast('Saqlandi'); render();
-  });
-}
-
-function purchaseForm() {
-  const lines = [];
-  const m = modal('Prixod — tovar kirimi', `<label class="f"><span>Yetkazib beruvchi / izoh</span><input id="sup"></label>
-    <div id="pl"></div><div class="row" style="margin-top:10px"><button class="btn" id="add">+ Mahsulot</button><span class="sp"></span><b id="pt"></b><button class="btn p" id="sv">Kirim qilish</button></div>
-    <p class="small muted">Tannarx o'rtacha (o'rtacha tortilgan) usulda yangilanadi.</p>`, { wide: true });
-  const draw = () => {
-    $('#pl', m.el).innerHTML = `<table><thead><tr><th>Mahsulot</th><th>Miqdor</th><th>Kelish narxi (1 birlik)</th><th>Yangi sotuv narxi</th><th class="num">Summa</th><th></th></tr></thead><tbody>
-      ${lines.map((l, i) => `<tr data-i="${i}"><td>${esc(l.name)}</td><td><input class="inl" type="number" step="0.1" data-k="qty" value="${l.qty}"></td>
-      <td><input class="inl" type="number" data-k="cost" value="${l.cost}"></td><td><input class="inl" type="number" data-k="price" value="${l.price}"></td>
-      <td class="num">${fmt(l.qty * l.cost)}</td><td><button class="btn sm bad" data-del>×</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">Mahsulot qo\'shing</td></tr>'}</tbody></table>`;
-    $('#pt', m.el).textContent = sum(lines.reduce((a, l) => a + l.qty * l.cost, 0));
-  };
-  $('#pl', m.el).onchange = e => { const tr = e.target.closest('tr[data-i]'); if (!tr) return; lines[tr.dataset.i][e.target.dataset.k] = +e.target.value; draw(); };
-  $('#pl', m.el).onclick = e => { if (e.target.closest('[data-del]')) { lines.splice(e.target.closest('tr').dataset.i, 1); draw(); } };
-  $('#add', m.el).onclick = () => pickProduct(p => { lines.push({ product_id: p.id, name: p.name, qty: 1, cost: p.cost, price: p.price }); draw(); });
-  $('#sv', m.el).onclick = safe(async () => {
-    if (!lines.length) throw new Error('Mahsulot yo\'q');
-    await POST('purchases', { supplier: $('#sup', m.el).value, items: lines });
-    await reloadBoot(); m.close(); toast('Kirim qilindi'); render();
-  });
-  draw();
-}
-
-VIEWS.mijoz = async () => {
-  const list = await GET('customers?q=' + encodeURIComponent(S.ctx.q || ''));
-  const totalCb = list.reduce((a, c) => a + c.cashback, 0);
-  $('#app').innerHTML = `<div class="row"><h2 class="sp">Mijozlar</h2><span class="muted">Ro'yxatdagi keshbek qarzi: <b>${sum(totalCb)}</b></span></div>
-    <div class="card"><form id="sf" class="row" style="margin-bottom:10px"><input id="q" class="sp" placeholder="Ism, telefon yoki mashina raqami" value="${esc(S.ctx.q || '')}"><button class="btn">Qidirish</button></form>
-    <div class="tbl-wrap"><table><thead><tr><th>Ism</th><th>Telefon</th><th>Mashinalar</th><th class="num">Tashrif</th><th class="num">Xarid</th><th class="num">Keshbek</th></tr></thead><tbody>
-    ${list.map(c => `<tr class="click" data-id="${c.id}"><td>${esc(c.name || '—')}</td><td>${phoneShow(c.phone)}</td><td>${(c.plates || '').split(', ').map(plateFmt).join(', ')}</td><td class="num">${c.visits}</td><td class="num">${fmt(c.spent)}</td><td class="num pos"><b>${fmt(c.cashback)}</b></td></tr>`).join('') || '<tr><td colspan="6" class="empty">Topilmadi</td></tr>'}</tbody></table></div></div>`;
-  $('#sf').onsubmit = e => { e.preventDefault(); S.ctx.q = $('#q').value; render(); };
-  $$('tr[data-id]').forEach(tr => tr.onclick = safe(() => customerCard(tr.dataset.id)));
-};
-
-async function customerCard(id) {
-  const c = await GET('customers/' + id);
-  const m = modal(c.name || c.phone || 'Mijoz', `
-    <div class="grid g3"><label class="f"><span>Ism</span><input id="n" value="${esc(c.name)}"></label><label class="f"><span>Telefon</span><input id="p" value="${esc(c.phone)}"></label>
-    <div class="stat"><div class="label">Keshbek balansi</div><div class="big pos">${sum(c.cashback)}</div></div></div>
-    <label class="f"><span>Izoh</span><input id="no" value="${esc(c.note || '')}"></label>
-    <div class="row end"><button class="btn" id="adj">Keshbekni qo'lda o'zgartirish</button><button class="btn p" id="sv">Saqlash</button></div>
-    <h3 style="margin-top:14px">Mashinalar</h3><div>${c.cars.map(x => `<span class="tag boshqa" style="font-size:14px;margin-right:6px">${plateFmt(x.plate)} · ${carDesc(x)} · ${km(x.last_mileage)}</span>`).join('') || '—'}</div>
-    <h3 style="margin-top:14px">Xaridlar</h3><div class="tbl-wrap"><table><tbody>${c.orders.map(o => `<tr><td>${dateOf(o.created_at)}</td><td>${esc(o.plate || 'sotuv')}</td><td>${km(o.mileage)}</td><td><span class="tag ${o.status}">${STATUS[o.status]}</span></td><td class="num">${fmt(o.total)}</td><td class="num pos">${o.cashback_earned ? '+' + fmt(o.cashback_earned) : ''}</td></tr>`).join('') || '<tr><td class="empty">Yo\'q</td></tr>'}</tbody></table></div>
-    <h3 style="margin-top:14px">Keshbek harakati</h3><table><tbody>${c.cashback_tx.map(t => `<tr><td>${dateOf(t.created_at)}</td><td>${esc(t.kind)}</td><td class="num ${t.amount < 0 ? 'neg' : 'pos'}">${t.amount > 0 ? '+' : ''}${fmt(t.amount)}</td></tr>`).join('') || '<tr><td class="empty">Yo\'q</td></tr>'}</tbody></table>`, { wide: true });
-  $('#sv', m.el).onclick = safe(async () => { await PUT('customers/' + id, { name: $('#n', m.el).value, phone: $('#p', m.el).value, note: $('#no', m.el).value }); m.close(); toast('Saqlandi'); render(); });
-  $('#adj', m.el).onclick = safe(async () => {
-    const v = prompt("Qancha qo'shish (manfiy — ayirish), so'm:"); if (!v || isNaN(+v)) return;
-    await POST(`customers/${id}/cashback`, { amount: +v }); m.close(); customerCard(id);
-  });
-}
-
-VIEWS.inventar = async () => {
-  if (S.ctx.inv) return inventoryView(S.ctx.inv);
-  const list = await GET('inventories');
-  $('#app').innerHTML = `<div class="row"><h2 class="sp">Inventarizatsiya (oyda 1 marta)</h2><button class="btn p" id="new">+ Yangi inventarizatsiya</button></div>
-    <div class="card"><table><thead><tr><th>#</th><th>Boshlandi</th><th>Yopildi</th><th>Holat</th><th class="num">Pozitsiya</th></tr></thead><tbody>
-    ${list.map(i => `<tr class="click" data-id="${i.id}"><td>${i.id}</td><td>${dateOf(i.created_at)} ${timeOf(i.created_at)}</td><td>${dateOf(i.closed_at)}</td><td>${i.status}</td><td class="num">${i.n}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">Hali o\'tkazilmagan</td></tr>'}</tbody></table></div>`;
-  $('#new').onclick = safe(async () => { const inv = await POST('inventories', {}); S.ctx.inv = inv.id; render(); });
-  $$('tr[data-id]').forEach(tr => tr.onclick = () => { S.ctx.inv = +tr.dataset.id; render(); });
-};
-
-async function inventoryView(id) {
-  const inv = await GET('inventories/' + id);
-  const open = inv.status === 'ochiq';
-  const base = it => open ? it.current_stock : it.expected;
-  const draw = () => {
-    let plus = 0, minus = 0, counted = 0;
-    inv.items.forEach(it => {
-      if (it.actual == null || it.actual === '') return; counted++;
-      const d = (+it.actual - base(it)) * it.cost; if (d > 0) plus += d; else minus += d;
-    });
-    $('#sumv').innerHTML = `Sanaldi: <b>${counted}/${inv.items.length}</b> · Ortiqcha: <b class="pos">${sum(plus)}</b> · Kamomad: <b class="neg">${sum(minus)}</b> · Farq: <b>${sum(plus + minus)}</b>`;
-  };
-  $('#app').innerHTML = `<div class="row"><button class="btn" id="back">‹ Ro'yxat</button><h2 class="sp" style="margin:0">Inventarizatsiya #${id} — ${open ? 'ochiq' : 'yopilgan'}</h2>
-    ${open ? '<button class="btn" id="sv">Saqlash</button><button class="btn ok" id="cl">Yakunlash va qoldiqni to\'g\'rilash</button>' : ''}</div>
-    <div class="card"><div id="sumv" style="margin-bottom:10px"></div><input id="q" placeholder="Qidirish" style="margin-bottom:10px">
-    <div class="tbl-wrap"><table><thead><tr><th>Mahsulot</th><th class="num">Tizimda</th><th style="width:140px">Haqiqiy (sanalgan)</th><th class="num">Farq</th><th class="num">Farq summasi</th></tr></thead><tbody>
-    ${inv.items.map((it, i) => `<tr data-i="${i}" data-n="${esc(it.name.toLowerCase())}"><td><span class="tag ${it.category}">${CATS[it.category]}</span> ${esc(it.name)}</td><td class="num">${qtyFmt(base(it))} ${esc(it.unit)}</td>
-      <td>${open ? `<input class="inl" type="number" step="0.1" value="${it.actual ?? ''}">` : qtyFmt(it.actual ?? '—')}</td><td class="num d"></td><td class="num ds"></td></tr>`).join('')}</tbody></table></div>
-    ${open ? '<p class="small muted">«Tizimda» — hozirgi qoldiq (inventar paytidagi sotuvlar hisobga olingan). Bo\'sh qoldirilgan qatorlar o\'zgarmaydi.</p>' : ''}</div>`;
-  const rowDiff = tr => {
-    const it = inv.items[tr.dataset.i]; if (it.actual == null || it.actual === '') { $('.d', tr).textContent = ''; $('.ds', tr).textContent = ''; return; }
-    const d = +it.actual - base(it); $('.d', tr).textContent = (d > 0 ? '+' : '') + qtyFmt(d); $('.d', tr).className = 'num d ' + (d < 0 ? 'neg' : d > 0 ? 'pos' : '');
-    $('.ds', tr).textContent = fmt(d * it.cost); $('.ds', tr).className = 'num ds ' + (d < 0 ? 'neg' : d > 0 ? 'pos' : '');
-  };
-  $$('tr[data-i]').forEach(rowDiff); draw();
-  $('#back').onclick = () => { S.ctx.inv = null; render(); };
-  $('#q').oninput = e => $$('tr[data-n]').forEach(tr => tr.hidden = !tr.dataset.n.includes(e.target.value.toLowerCase()));
-  if (!open) return;
-  $('#app').oninput = e => { const tr = e.target.closest('tr[data-i]'); if (!tr) return; inv.items[tr.dataset.i].actual = e.target.value; rowDiff(tr); draw(); };
-  const save = () => PUT('inventories/' + id, { items: inv.items.map(it => ({ product_id: it.product_id, actual: it.actual })) });
-  $('#sv').onclick = safe(async () => { await save(); toast('Saqlandi'); });
-  $('#cl').onclick = safe(async () => {
-    if (!(await confirmBox('Inventarizatsiya yakunlansinmi? Ombor qoldiqlari sanalgan miqdorga to\'g\'rilanadi.'))) return;
-    await save(); await POST(`inventories/${id}/close`); await reloadBoot(); toast('Yakunlandi'); render();
-  });
-}
-
-VIEWS.hisobot = async () => {
-  const pb = periodBar('hisP', 'month');
-  const r = await GET('reports/profit?' + pb.q);
-  const h = r.head;
-  const cat = k => r.categories.find(c => c.cat === k) || { qty: 0, revenue: 0, cost: 0, profit: 0 };
-  const card = (label, v, cls = '', sub = '') => `<div class="card stat"><div class="label">${label}</div><div class="big ${cls}">${fmt(v)}</div>${sub ? `<div class="small muted">${sub}</div>` : ''}</div>`;
-  const sign = v => v < 0 ? 'neg' : 'pos';
-  $('#app').innerHTML = `${pb.html}
-    <div class="grid g4">${card('Tushum (naqd + karta)', h.revenue, '', `naqd ${fmt(h.cash)} · karta ${fmt(h.card)}`)}${card('Zakazlar', h.orders, '', `zamena ${h.zamena || 0} · sotuv ${h.sotuv || 0}`)}
-      ${card('Yalpi foyda', r.gross_profit, sign(r.gross_profit), 'tushum − tannarx')}${card('Sof foyda', r.net_profit, sign(r.net_profit), 'KPI, oylik va xarajatlardan keyin')}</div>
-    <div class="grid g2">
-    <div class="card"><h3>Foyda qayerdan keldi</h3><table><tbody>
-      <tr><td>Moy foydasi</td><td class="num">${qtyFmt(cat('moy').qty)} L</td><td class="num ${sign(r.oil_profit)}"><b>${fmt(r.oil_profit)}</b></td></tr>
-      <tr><td>Filtrlar (foyda / zarar)</td><td class="num">${qtyFmt(cat('filtr').qty)} ta</td><td class="num ${sign(r.filter_profit)}"><b>${fmt(r.filter_profit)}</b></td></tr>
-      <tr><td>Bonus (tekin berilgan) tannarxi</td><td class="num">${qtyFmt(cat('bonus').qty)}</td><td class="num neg"><b>−${fmt(r.bonus_cost)}</b></td></tr>
-      <tr><td>Boshqa / xizmat</td><td></td><td class="num ${sign(r.other_profit - 0)}"><b>${fmt(r.other_profit)}</b></td></tr>
-      <tr><td class="small muted" colspan="3">«Boshqa» ichida chegirma (−${fmt(h.discount)}) va keshbekdan to'lov (−${fmt(h.cashback_used)}) ham hisobga olingan.</td></tr>
-      <tr><td><b>Yalpi foyda</b></td><td></td><td class="num"><b>${fmt(r.gross_profit)}</b></td></tr>
-      <tr><td>Usta / sotuvchi KPI</td><td></td><td class="num neg">−${fmt(r.kpi_total)}</td></tr>
-      <tr><td>Oylik (asosiy maosh ulushi)</td><td></td><td class="num neg">−${fmt(r.salary_total)}</td></tr>
-      <tr><td>Boshqa xarajatlar</td><td></td><td class="num neg">−${fmt(r.expenses)}</td></tr>
-      <tr><td><b>Sof foyda</b></td><td></td><td class="num ${sign(r.net_profit)}"><b>${fmt(r.net_profit)}</b></td></tr></tbody></table>
-      <div class="sum-box small" style="margin-top:10px">Moy foydasi filtr zarari va bonuslarni qoplaydimi: <b class="${r.oil_profit + Math.min(r.filter_profit, 0) - r.bonus_cost >= 0 ? 'pos' : 'neg'}">${fmt(r.oil_profit + Math.min(r.filter_profit, 0) - r.bonus_cost)}</b> qoladi.<br>
-      Berilgan keshbek: ${fmt(h.cashback_earned)} · Mijozlardagi jami keshbek (qarz): ${fmt(r.cashback_liability)}</div></div>
-    <div class="card"><div class="row"><h3 class="sp">Xarajatlar</h3><button class="btn sm" id="addx">+ Xarajat</button></div><div id="xl" class="small"></div></div></div>
-    <div class="card"><h3>Mahsulotlar bo'yicha</h3><div class="tbl-wrap"><table><thead><tr><th>Mahsulot</th><th class="num">Miqdor</th><th class="num">Bonus</th><th class="num">Tushum</th><th class="num">Tannarx</th><th class="num">Foyda</th></tr></thead><tbody>
-      ${r.products.map(p => `<tr><td><span class="tag ${p.category}">${CATS[p.category]}</span> ${esc(p.name)}</td><td class="num">${qtyFmt(p.qty)}</td><td class="num">${p.bonus_lines || ''}</td><td class="num">${fmt(p.revenue)}</td><td class="num">${fmt(p.cost)}</td><td class="num ${sign(p.profit)}"><b>${fmt(p.profit)}</b></td></tr>`).join('') || '<tr><td colspan="6" class="empty">Sotuv yo\'q</td></tr>'}</tbody></table></div></div>`;
-  pb.bind();
-  const xs = await GET('expenses?' + pb.q);
-  $('#xl').innerHTML = xs.map(x => `<div class="row"><span>${dateOf(x.created_at)}</span><span class="sp">${esc(x.title)}</span><b>${fmt(x.amount)}</b></div>`).join('') || '<div class="muted">Ijara, svet, va h.k. shu yerga</div>';
-  $('#addx').onclick = () => {
-    const m = modal('Xarajat', `<label class="f"><span>Nima uchun</span><input id="t"></label><label class="f"><span>Summa</span><input id="a" type="number"></label><div class="row end"><button class="btn p" id="sv">Saqlash</button></div>`);
-    $('#sv', m.el).onclick = safe(async () => { await POST('expenses', { title: $('#t', m.el).value, amount: $('#a', m.el).value }); m.close(); render(); });
-  };
-};
-
-VIEWS.oylik = async () => {
-  const d = new Date().getDate();
-  const pb = periodBar('oyP', d <= 15 ? 'h1' : 'h2');
-  const r = await GET('reports/payroll?' + pb.q);
-  const s = S.boot.settings;
-  $('#app').innerHTML = `${pb.html}
-    <div class="card"><h3>Oylik va KPI: ${dateOf(r.from)} — ${dateOf(r.to)}</h3>
-    <p class="small muted">Har oyning 15-sanasi (1–15) va oxirgi kuni (16–30/31) to'lanadi. KPI: usta — mashina boshiga ${fmt(s.master_kpi_per_car)} + foydadan ${s.master_kpi_percent}%,
-      zamena sotuvchisi — mashina boshiga ${fmt(s.seller_kpi_per_car)} + ${s.seller_kpi_percent}%, kassir — foydadan ${s.cashier_kpi_percent}%. (Sozlamalarda o'zgartiriladi.)</p>
-    <div class="tbl-wrap"><table><thead><tr><th>Xodim</th><th>Lavozim</th><th class="num">Mashina</th><th class="num">Moy (L)</th><th class="num">Keltirgan foyda</th><th class="num">KPI</th><th class="num">Asosiy maosh</th><th class="num">Jami</th><th class="num">To'langan</th><th class="num">Qoldi</th><th></th></tr></thead><tbody>
-    ${r.rows.map(x => `<tr><td><b>${esc(x.employee.name)}</b></td><td>${ROLES[x.employee.role]}</td><td class="num">${x.cars}</td><td class="num">${qtyFmt(x.oil)}</td>
-      <td class="num">${fmt(x.profit)}</td><td class="num"><b>${fmt(x.kpi)}</b></td><td class="num">${fmt(x.base)}</td><td class="num"><b>${fmt(x.total)}</b></td>
-      <td class="num">${fmt(x.paid)}</td><td class="num ${x.due > 0 ? 'neg' : ''}"><b>${fmt(x.due)}</b></td>
-      <td>${x.due > 0 ? `<button class="btn sm ok" data-pay="${x.employee.id}" data-a="${x.due}">To'lash</button>` : '<span class="tag tayyor">✓</span>'}</td></tr>`).join('')}</tbody>
-    <tfoot><tr><td colspan="5"><b>Jami</b></td><td class="num"><b>${fmt(r.kpi_total)}</b></td><td class="num"><b>${fmt(r.salary_total)}</b></td><td class="num"><b>${fmt(r.kpi_total + r.salary_total)}</b></td><td colspan="3"></td></tr></tfoot></table></div></div>`;
-  pb.bind();
-  $$('[data-pay]').forEach(b => b.onclick = safe(async () => {
-    const e = emp(b.dataset.pay);
-    const v = prompt(`${e.name} ga to'lanadigan summa:`, b.dataset.a); if (!v || isNaN(+v)) return;
-    await POST('salary', { employee_id: e.id, period_from: r.from, period_to: r.to, amount: +v }); toast("To'lov yozildi"); render();
-  }));
-};
-
-VIEWS.xodim = async () => {
-  const list = await GET('employees');
-  $('#app').innerHTML = `<div class="row"><h2 class="sp">Xodimlar</h2><button class="btn p" id="new" type="button">+ Xodim</button></div>
-    <div class="card"><div class="tbl-wrap"><table><thead><tr><th>Ism</th><th>Lavozim</th><th>Login</th><th>Telefon</th><th class="num">Oylik maosh (oyiga)</th><th>Holat</th></tr></thead><tbody>
-    ${list.map(e => `<tr class="click" data-id="${e.id}"><td><b>${esc(e.name)}</b></td><td>${ROLES[e.role] || e.role}</td><td>${e.login ? esc(e.login) + (e.has_password ? '' : ' <span class="neg small">parol yo\'q</span>') : '<span class="muted">—</span>'}</td>
-      <td>${esc(e.phone)}</td><td class="num">${fmt(e.base_salary)}</td><td>${e.active ? 'faol' : 'ishdan ketgan'}</td></tr>`).join('')}</tbody></table></div>
-    <p class="small muted">Planshet va kassaga faqat login-paroli bor xodim kiradi. Zamena sotuvchisi — planshet; kassir — kassa; rahbar — hammasi (hisobot, oylik, sozlamalar).
-      Ustalar tizimga kirmaydi, ularni sotuvchi planshetda belgilaydi.<br>Asosiy maosh 2 ga bo'linib 15 va oy oxirida beriladi; KPI har davr uchun alohida hisoblanadi.</p></div>`;
-  const form = e => {
-    const m = modal(e ? e.name : 'Yangi xodim', `<label class="f"><span>Ism</span><input id="n" value="${esc(e?.name || '')}"></label>
-      <div class="grid g2"><label class="f"><span>Lavozim</span><select id="r">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${e?.role === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-      <label class="f"><span>Telefon</span><input id="p" value="${esc(e?.phone || '')}"></label>
-      <label class="f lgf"><span>Login (lotin harflari)</span><input id="lg" autocapitalize="none" autocomplete="off" value="${esc(e?.login || '')}"></label>
-      <label class="f lgf"><span>${e?.has_password ? 'Yangi parol (o\'zgartirish uchun)' : 'Parol'}</span><input id="pw" type="password" autocomplete="new-password"></label>
-      <label class="f"><span>Asosiy oylik (oyiga, so'm)</span><input id="b" type="number" value="${e?.base_salary || 0}"></label>
-      <label class="f"><span>Holat</span><select id="a"><option value="1">Faol</option><option value="0" ${e && !e.active ? 'selected' : ''}>Ishdan ketgan</option></select></label></div>
-      <div class="row end"><button class="btn p" id="sv" type="button">Saqlash</button></div>`);
-    const roleChg = () => $$('.lgf', m.el).forEach(x => { x.hidden = $('#r', m.el).value === 'usta'; });
-    $('#r', m.el).onchange = roleChg; roleChg();
-    $('#sv', m.el).onclick = safe(async () => {
-      const b = { name: $('#n', m.el).value, role: $('#r', m.el).value, phone: $('#p', m.el).value, base_salary: $('#b', m.el).value, active: +$('#a', m.el).value,
-        login: $('#lg', m.el).value.trim(), password: $('#pw', m.el).value };
-      e ? await PUT('employees/' + e.id, b) : await POST('employees', b); await reloadBoot(); m.close(); toast('Saqlandi'); render();
-    });
-  };
-  $('#new').onclick = () => form(null);
-  $$('tr[data-id]').forEach(tr => tr.onclick = () => form(list.find(e => e.id == tr.dataset.id)));
-};
-
-VIEWS.sozlama = async () => {
-  const s = await GET('settings');
-  const models = await GET('car_models');
-  const F = [
-    ['shop_name', "Do'kon nomi", 'text'],
-    ['cashback_percent', "Keshbek, to'langan summadan %", 'number'],
-    ['next_service_km', 'Keyingi almashtirishgacha (km)', 'number'],
-    ['master_kpi_per_car', "Usta KPI: har bir mashina uchun (so'm)", 'number'],
-    ['master_kpi_percent', 'Usta KPI: zakaz foydasidan %', 'number'],
-    ['seller_kpi_per_car', "Zamena sotuvchisi KPI: har mashina uchun (so'm)", 'number'],
-    ['seller_kpi_percent', 'Zamena sotuvchisi KPI: zakaz foydasidan %', 'number'],
-    ['cashier_kpi_percent', "Kassir KPI: o'zi yopgan savdo foydasidan %", 'number'],
-  ];
-  $('#app').innerHTML = `<div class="grid g2" style="align-items:start">
-    <div class="card"><h2>Sozlamalar</h2>
-      ${F.map(([k, l, t]) => `<label class="f"><span>${l}</span><input data-k="${k}" type="${t}" step="any" value="${esc(s[k])}"></label>`).join('')}
-      <div class="row end"><button class="btn p" id="sv" type="button">Saqlash</button></div></div>
-    <div class="card"><h2>Mashina turlari</h2>
-      <p class="small muted">Planshetda filtrlar shunga qarab chiqadi: ${Object.entries(GROUPS).map(([k, v]) => `<b>${v}</b> — ${(S.boot.group_filters[k] || []).map(x => FNAME[x].replace(' filtri', '')).join(', ')}`).join('; ')}.</p>
-      <div class="row" style="margin-bottom:10px"><input id="nm" placeholder="Yangi model nomi" class="sp"><select id="ng" style="width:auto">${Object.entries(GROUPS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select><button class="btn" id="add" type="button">Qo'shish</button></div>
-      <div class="tbl-wrap"><table><tbody>${models.map(x => `<tr><td>${esc(x.name)}</td><td style="width:180px"><select data-mid="${x.id}">${Object.entries(GROUPS).map(([k, v]) => `<option value="${k}" ${(x.grp || 'boshqa') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table></div></div></div>`;
-  $('#sv').onclick = safe(async () => {
-    const b = {}; $$('[data-k]').forEach(i => { b[i.dataset.k] = i.value; });
-    await PUT('settings', b); await reloadBoot(); toast('Saqlandi');
-  });
-  $$('[data-mid]').forEach(sl => sl.onchange = safe(async () => { await PUT('car_models/' + sl.dataset.mid, { grp: sl.value }); await reloadBoot(); toast('Saqlandi'); }));
-  $('#add').onclick = safe(async () => { await POST('car_models', { name: $('#nm').value, grp: $('#ng').value }); await reloadBoot(); render(); });
-};
-
-start();

@@ -1,93 +1,72 @@
-# Moy almashtirish (zamena) tizimi
+# Zamena — moy almashtirish va kassa tizimi
 
-Do'kon kompyuterida ishlaydigan kichik server + planshet va kassa uchun brauzer ilovasi.
-Internet shart emas — planshet va kompyuter **bir Wi-Fi** tarmog'ida bo'lsa yetarli.
+Planshet (zamena sotuvchisi) + kassa (do'kon kompyuteri, Bito uslubidagi panel va POS) + rahbar hisobotlari.
+**Bitta kirish:** kim login-parolini tersa, o'ziga mos bo'limga o'tadi.
 
-## Telefon / planshetga ilova qilib o'rnatish
-`static/app.html` — o'rnatiladigan ilova (PWA). Hozircha **demo rejimda**: serversiz ishlaydi, ma'lumotlar shu qurilmada.
+## Sinab ko'rish (serversiz demo)
+**https://bakhtiyor0v.github.io/Baxtiyorov-s/** — telefon, planshet yoki kompyuterda oching.
 
-1. Telefonda oching: **https://bakhtiyor0v.github.io/Baxtiyorov-s/**
-2. **Android (Chrome):** «📲 O'rnatish» tugmasi yoki ⋮ → «Установить приложение».
-   **iPhone (Safari):** Ulashish ⬆ → «На экран „Домой“».
-
-Sayt GitHub Pages orqali `claude/salom-cloud-zwyzx3` branchidan chiqadi.
-
-**Yangilanish avtomatik:** o'zgarish GitHub'ga push qilingach, ilova keyingi ochilishda (internet bo'lsa)
-yangi versiyani o'zi oladi. Qayta o'rnatish shart emas. Internet bo'lmasa oxirgi versiya ochiladi.
-
-Kompyuterda serversiz sinash: `static/app.html` ni ikki marta bosib oching.
-
-## Ishga tushirish
-1. Kompyuterga [Python 3](https://www.python.org/downloads/) o'rnating (o'rnatishda **"Add Python to PATH"** belgilang).
-2. `ishga-tushirish.bat` ni ikki marta bosing (Linux/Mac: `python3 server.py`).
-3. Oynada manzillar chiqadi:
-   - **Kassa (shu kompyuter):** `http://localhost:8090/kassa`
-   - **Planshet:** `http://<kompyuter-IP>:8090/planshet` — planshet brauzerida oching va "Bosh ekranga qo'shish" qiling.
-
-Ma'lumotlar `data/zamena.db` faylida. **Zaxira nusxa** — shu faylni vaqti-vaqti bilan flesh/Telegram'ga nusxalang.
-
-## Jarayon
-| Kim | Qayerda | Nima qiladi |
+| Login / parol | Kim | Qayerga kiradi |
 |---|---|---|
-| Zamena sotuvchisi | Planshet | Raqam → mijoz/mashina → probeg, usta, moy, litr, filtrlar → **Kassaga o'tkazish** |
-| Kassir | Do'kon PC → Navbat | Mashina darhol navbatda chiqadi (ovoz bilan). Summani aytadi, chegirma, keshbek, naqd/karta → **To'landi** |
-| Rahbar | PC → Hisobot / Oylik | Foyda, KPI, oylik, inventarizatsiya, sozlamalar |
+| `sotuvchi` / `1111` | Zamena sotuvchisi | Planshet: jarayondagi mashinalar, yangi sotuv |
+| `kassir` / `2222` | Kassir | Kassa paneli + POS |
+| `admin` / `1234` | Rahbar | Hammasi: hisobot (foyda), oylik/KPI, xodimlar, sozlamalar |
 
-## Kirish (login) va rollar
-Planshet ham, kassa ham **login va parol** bilan ochiladi (bir vaqtda 2–3 kishi ishlashi mumkin). Chap burchakda kim kirgani ko'rinadi.
+Demo'da ma'lumotlar faqat shu brauzerda saqlanadi («Tozalash» — boshidan boshlash). Sayt GitHub Pages orqali
+`claude/salom-cloud-zwyzx3` branchidan chiqadi. O'rnatilgan ilova (📲 O'rnatish) o'zi yangilanadi.
 
-| Rol | Nima qila oladi |
+## Do'konda ishga tushirish (haqiqiy server)
+1. Kompyuterga [Python 3](https://www.python.org/downloads/) o'rnating (**"Add Python to PATH"** belgilang).
+2. `ishga-tushirish.bat` ni ikki marta bosing (Linux/Mac: `python3 server.py`).
+3. Oynada chiqqan manzilni oching: kompyuterda `http://localhost:8090`, planshetda `http://<kompyuter-IP>:8090`.
+4. Birinchi kirish: **admin / 1234** → Xodimlar bo'limida parolni almashtiring, sotuvchi va kassirga login bering.
+
+Ma'lumotlar `data/zamena.db` faylida — **zaxira nusxasini** vaqti-vaqti bilan oling.
+
+## Kassa paneli (chap menyu)
+| Bo'lim | Nima bor |
 |---|---|
-| Zamena sotuvchisi | Planshet: jarayondagi mashinalar va yangi sotuv. **Mijozlar ro'yxatini ko'ra olmaydi** — faqat raqami terilgan bitta mashina chiqadi (bazani o'g'irlashdan himoya) |
-| Kassir | Kassa: navbat, to'lov, sotuv, ombor, mijozlar, inventarizatsiya |
-| Rahbar | Hammasi: hisobot, oylik/KPI, xodimlar (login-parol berish), sozlamalar |
+| **POS — Sotuv** | To'liq ekran. Chapda 2 bo'lim: **Sotuv** (mahsulotlar, qidiruv/shtrix-kod, kategoriyalar, savat) va **Zamena** (planshetdan «Kassaga o'tkazish» qilingan mashinalar — tanlansa savatga tushadi). Mijoz tanlash/qo'shish (F3), chegirma, to'lov (F9) |
+| To'lov oynasi | **Naqd F6 · Terminal F7 · Kartadan o'tkazma F8 · Qarzga F10**, keshbekdan to'lash, bir nechta usul birga, qaytim hisobi, chek chiqarish |
+| Bosh sahifa | Bugungi tushum, cheklar, o'rtacha chek, jarayondagi zamena, smena, qarzlar |
+| Cheklar | Barcha cheklar: qidiruv (№, mashina raqami, mijoz), turi, kassir; chekni ko'rish, chop etish, **qaytarish** (qisman ham) |
+| Mijozlar | Ro'yxat, qarzdorlar filtri, yangi mijoz; kartochka: xaridlar, **qarzni to'lash**, keshbek va qarz tarixi |
+| Xaridlar | Yangi xarid: yetkazib beruvchi, mahsulotlar, kelish va sotuv narxi, chegirma, qisman to'lov → qolgani **qarzga** |
+| Yetkazib beruvchilar | Balans (qarzimiz), **pul berish / pul olish**, xaridlar va harakatlar tarixi |
+| Ombor / Inventarizatsiya | Mahsulotlar (moy rasmi, yopishqoqlik, bonus filtr, mos mashinalar), harakatlar, oylik inventarizatsiya |
+| Kassa | **Smena** ochish/yopish (Z-hisobot, sanalgan pul va farq), **kirim / chiqim (xarajat)** turlari bilan, harakatlar, smenalar tarixi |
+| Hisobotlar | Umumiy (kunlik tushum grafigi, to'lov usullari, kassirlar), mahsulotlar, qarzlar; rahbarga **Foyda** (moy/filtr/bonus, KPI, sof foyda) |
+| Oylik / KPI · Xodimlar · Sozlamalar | Faqat rahbar |
 
-Birinchi kirish: **admin / 1234** — darhol Xodimlar bo'limida parolni almashtiring va sotuvchi/kassirga login bering.
-Ustalar tizimga kirmaydi — sotuvchi ularni planshetda belgilaydi. Sotuvchi KPI'si o'zi kiritgan mashinalar bo'yicha hisoblanadi.
+Xarajat turlari Bito'dagidek: Ijara, Kommunal, Elektr, Gaz, Telefon, Reklama, Yo'lkira, Ish haqi, Avans, Usta puli, Inkassatsiya…
+Sotuv uchun smena ochiq bo'lishi shart.
 
-## Planshet jarayoni
-1. Asosiy ekran — **Jarayonda**: hozir ishlanayotgan mashinalar (Tayyor / Tahrirlash).
-2. **＋ Yangi sotuv** → raqam: `01 A 123 BC` yoki `01 123 ABC`. Boshqa format xato beradi; chet el mashinasi uchun **Istisno**.
-3. Mashina bazada bo'lsa — mijoz ma'lumoti va **moy almashtirish tarixi** (sana, km, qaysi moy, necha litr, filtrlar).
-   Bo'lmasa — mashina nomi, A/T yoki M/T, rangi, telefon (majburiy).
-4. **Motor moyi** bosiladi → chapda yopishqoqlik (10W-40, 5W-30…) → o'sha turdagi moylar rasmi bilan.
-5. Litr: 2.5 / 3 / 3.5 / 4 yoki qo'lda.
-6. Filtrlar mashina turiga qarab: **Chevrolet** — moy, havo, salon; **Xitoy** — moy, salon, havo, reduktor; **Damas/Labo** — moy, havo.
-   Chevrolet/Damas uchun faqat shu modelga mos filtrlar (2–3 firma) chiqadi; xitoy mashinalarida qo'lda tanlanadi.
-7. **Kassaga o'tkazish.**
+## Planshet (zamena sotuvchisi)
+1. Asosiy ekran — **Jarayonda**; **＋ Yangi sotuv** → raqam (`01 A 123 BC` / `01 123 ABC`, chet el uchun **Istisno**).
+2. Mashina bazada bo'lsa — mijoz va moy almashtirish tarixi; bo'lmasa — nomi, A/T–M/T, rangi, telefon (majburiy).
+3. Probeg, usta, **motor moyi** (yopishqoqlik → rasmli moylar), litr (2.5/3/3.5/4 yoki qo'lda),
+   filtrlar mashina turiga qarab (Chevrolet: moy, havo, salon · Xitoy: + reduktor · Damas: moy, havo).
+4. **Kassaga o'tkazish** → kassada POS → Zamena bo'limida paydo bo'ladi (ovoz bilan).
 
-Kassa → Ombor → moyni oching: **rasm yuklash**, yopishqoqlik va **«shu moy bilan tekin filtr»** (bonus) belgilanadi.
-Kassa → Sozlamalar → **Mashina turlari**: har bir model Chevrolet / Xitoy / Damas / Boshqa.
+## Rollar va xavfsizlik
+- Sotuvchi mijozlar ro'yxatini, telefonlarni, hisobotlarni ko'ra olmaydi — faqat raqami terilgan bitta mashina (bazani o'g'irlashdan himoya); raqam qidiruvi cheklangan.
+- Kassir foydani ko'rmaydi; hisobotlarda faqat savdo.
+- Parollar tuzli SHA-256; 5 marta noto'g'ri — 5 daqiqa kutish.
 
 ## Pul hisobi
-- **Xizmat haqi** odatda 0 — foyda mahsulotdan.
-- **Bonus**: tekin berilgan narsa (salfetka, ochistitel…) «Bonus» belgisi bilan yoziladi — narxi 0, tannarxi foydadan ayriladi.
-- Hisobotda: **moy foydasi**, **filtrlar foyda/zarari**, **bonus tannarxi** alohida ko'rinadi va «moy foydasi filtr zarari + bonuslarni qoplaydimi» qatori bor.
-- **Sof foyda** = yalpi foyda − KPI − asosiy oylik − xarajatlar (ijara, svet…).
-- **Keshbek**: to'langan summadan % (Sozlamalar). Mijoz telefon bo'yicha aniqlanadi, keyingi safar kassada keshbekdan to'lashi mumkin.
-
-## KPI va oylik
-- Usta: har bir mashina uchun X so'm + zakaz foydasidan Y% (Sozlamalar).
-- Zamena sotuvchisi: har mashina uchun + %; kassir: o'zi yopgan savdo foydasidan %.
-- Faqat **to'langan** zakazlar hisoblanadi.
-- «Oylik / KPI» bo'limida **1–15** va **16–oxiri** davrlari: KPI + asosiy maoshning yarmi, «To'lash» tugmasi to'lovni yozib qo'yadi.
-
-## Ombor va inventarizatsiya
-- Mahsulot: tannarx, sotuv narxi, qoldiq. Moy — litrda (quyma).
-- **Prixod**: kirim, tannarx o'rtacha usulda yangilanadi.
-- **Inventarizatsiya** (oyda 1 marta): tizimdagi qoldiq ko'rinadi, sanalganini yozasiz → kamomad/ortiqcha summasi → yakunlaganda qoldiq to'g'rilanadi.
-
-## Xavfsizlik
-- Har bir xodim o'z login-paroli bilan kiradi; parollar bazada shifrlangan (tuzli SHA-256) holda saqlanadi.
-- 5 marta noto'g'ri parol — 5 daqiqa kutish.
-- Planshet (sotuvchi) mijozlar ro'yxatini, telefon raqamlarini (jarayondagi ro'yxatda), hisobotlarni ocha olmaydi;
-  raqam bo'yicha qidiruv ham cheklangan (10 daqiqada 60 ta).
+- **Bonus** (tekin) — narxi 0, tannarxi foydadan ayriladi. Moyga bog'langan bonus filtr avtomatik tekin bo'ladi.
+- **Keshbek** — to'langan (qarzga emas) summadan %. **Qarzga sotish** faqat tanlangan mijozga.
+- **Qaytarish** — mahsulot omborga qaytadi, pul tanlangan usulda (yoki mijoz qarzidan), keshbek ulushi qaytariladi.
+- **Sof foyda** = yalpi foyda − KPI − asosiy oylik − xarajatlar (ish haqi turlari oylikda alohida hisoblanadi).
 
 ## Fayllar
 ```
-server.py            — server va baza (faqat Python standart kutubxonasi)
-static/index.html    — sahifa
-static/app.js        — planshet + kassa interfeysi
+server.py            — server va baza (faqat Python standart kutubxonasi + SQLite)
+static/index.html    — server rejimidagi sahifa
+static/app.html      — o'rnatiladigan ilova (demo rejim, GitHub Pages)
+static/app.js        — umumiy qism, kirish, planshet
+static/kassa.js      — kassa paneli, POS, hisobotlar
+static/demo.js       — serversiz demo (server.py qoidalarining brauzerdagi nusxasi)
 static/app.css       — dizayn
 ishga-tushirish.bat  — Windows uchun ishga tushirish
 ```
