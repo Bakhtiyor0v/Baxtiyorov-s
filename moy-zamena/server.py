@@ -9,8 +9,12 @@ bir Wi-Fi tarmog'ida brauzer orqali ulanadi:
 Faqat Python standart kutubxonasi ishlatiladi (o'rnatish shart emas).
 Ma'lumotlar bazasi: data/zamena.db (SQLite).
 """
+import base64
+import hashlib
 import json
 import os
+import secrets
+import time
 import re
 import sqlite3
 import sys
@@ -38,26 +42,41 @@ DEFAULT_SETTINGS = {
     "seller_kpi_percent": "0",
     "cashier_kpi_percent": "0",       # kassir: o'zi yopgan savdo foydasidan %
     "next_service_km": "8000",        # keyingi almashtirishgacha km
-    "admin_pin": "",                  # hisobot/oylik/sozlamalar uchun PIN
 }
+
+# Mashina guruhi bo'yicha planshetda chiqadigan filtrlar
+GROUP_FILTERS = {
+    "chevrolet": ["moy", "havo", "salon"],
+    "xitoy": ["moy", "salon", "havo", "reduktor"],
+    "damas": ["moy", "havo"],
+    "boshqa": ["moy", "havo", "salon"],
+}
+FILTER_KINDS = ("moy", "havo", "salon", "reduktor", "yoqilgi")
+ROLES = ("usta", "sotuvchi", "kassir", "admin")
+# O'zbekiston raqami: 01 A 123 BC yoki 01 123 ABC
+PLATE_OK = re.compile(r"\d{2}[A-Z]\d{3}[A-Z]{2}|\d{5}[A-Z]{3}")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS employees(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL,
-  phone TEXT DEFAULT '', base_salary INTEGER DEFAULT 0, active INTEGER DEFAULT 1);
+  phone TEXT DEFAULT '', base_salary INTEGER DEFAULT 0, active INTEGER DEFAULT 1,
+  login TEXT, pass_hash TEXT);
+CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, employee_id INTEGER NOT NULL, created_at TEXT);
 CREATE TABLE IF NOT EXISTS customers(
   id INTEGER PRIMARY KEY, name TEXT DEFAULT '', phone TEXT DEFAULT '',
   cashback INTEGER DEFAULT 0, note TEXT DEFAULT '', created_at TEXT);
 CREATE TABLE IF NOT EXISTS cars(
   id INTEGER PRIMARY KEY, plate TEXT UNIQUE NOT NULL, model TEXT DEFAULT '',
   customer_id INTEGER, last_mileage INTEGER DEFAULT 0, created_at TEXT,
-  transmission TEXT DEFAULT '', color TEXT DEFAULT '');
+  transmission TEXT DEFAULT '', color TEXT DEFAULT '', plate_exception INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS products(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
   unit TEXT DEFAULT 'dona', cost REAL DEFAULT 0, price INTEGER DEFAULT 0,
-  stock REAL DEFAULT 0, barcode TEXT DEFAULT '', active INTEGER DEFAULT 1, kind TEXT DEFAULT '');
-CREATE TABLE IF NOT EXISTS car_models(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, sort INTEGER DEFAULT 100);
+  stock REAL DEFAULT 0, barcode TEXT DEFAULT '', active INTEGER DEFAULT 1, kind TEXT DEFAULT '',
+  grade TEXT DEFAULT '', bonus_kinds TEXT DEFAULT '', image TEXT, image_v INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS car_models(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, sort INTEGER DEFAULT 100,
+  grp TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS product_models(product_id INTEGER NOT NULL, model TEXT NOT NULL, PRIMARY KEY(product_id, model));
 CREATE TABLE IF NOT EXISTS orders(
   id INTEGER PRIMARY KEY, type TEXT NOT NULL, car_id INTEGER, customer_id INTEGER,
@@ -92,33 +111,52 @@ CREATE INDEX IF NOT EXISTS ix_orders_closed ON orders(closed_at);
 CREATE INDEX IF NOT EXISTS ix_items_order ON order_items(order_id);
 """
 
-# name, category, kind, unit, cost, price, mos mashinalar (namuna — o'zingiznikiga almashtiring)
+CHEV = ["Cobalt", "Nexia 3", "Gentra", "Lacetti", "Nexia 2"]
+SMALL = ["Spark", "Matiz", "Damas", "Labo"]
+# Namuna mahsulotlar — o'zingiznikiga almashtiring. Moy narxi 1 litr uchun.
+# (nomi, kategoriya, turi, o'lchov, tannarx, narx, mos mashinalar, yopishqoqlik, bonus filtrlar)
 SEED_PRODUCTS = [
-    ("Motor moyi 5W-30 (1 L, quyma)", "moy", "motor", "litr", 70000, 95000, []),
-    ("Motor moyi 5W-40 (1 L, quyma)", "moy", "motor", "litr", 65000, 90000, []),
-    ("Motor moyi 10W-40 (1 L, quyma)", "moy", "motor", "litr", 45000, 65000, []),
-    ("Karobka moyi (1 L)", "moy", "karobka", "litr", 60000, 85000, []),
-    ("Moy filtri (Cobalt/Nexia 3/Gentra/Lacetti)", "filtr", "moy", "dona", 32000, 30000,
-     ["Cobalt", "Nexia 3", "Gentra", "Lacetti", "Nexia 2"]),
-    ("Moy filtri (Spark/Matiz/Damas)", "filtr", "moy", "dona", 28000, 28000, ["Spark", "Matiz", "Damas", "Labo"]),
-    ("Havo filtri (Cobalt/Nexia 3)", "filtr", "havo", "dona", 35000, 35000, ["Cobalt", "Nexia 3"]),
-    ("Havo filtri (Gentra/Lacetti)", "filtr", "havo", "dona", 38000, 38000, ["Gentra", "Lacetti"]),
-    ("Salon filtri (Cobalt/Nexia 3)", "filtr", "salon", "dona", 30000, 30000, ["Cobalt", "Nexia 3"]),
-    ("Salon filtri (Gentra/Lacetti)", "filtr", "salon", "dona", 30000, 30000, ["Gentra", "Lacetti"]),
-    ("Yoqilg'i filtri", "filtr", "yoqilgi", "dona", 40000, 45000, []),
-    ("Antifriz (1 L)", "boshqa", "", "litr", 18000, 25000, []),
-    ("Tormoz suyuqligi", "boshqa", "", "dona", 25000, 35000, []),
-    ("Salfetka / ochistitel", "boshqa", "", "dona", 5000, 10000, []),
-    ("Moy almashtirish xizmati", "xizmat", "", "dona", 0, 0, []),
+    ("Mobil Super 3000 5W-40", "moy", "motor", "litr", 95000, 125000, [], "5W-40", "moy"),
+    ("Total Quartz 9000 5W-40", "moy", "motor", "litr", 90000, 115000, [], "5W-40", ""),
+    ("GM Dexos2 5W-30", "moy", "motor", "litr", 85000, 110000, [], "5W-30", "moy"),
+    ("Lukoil Genesis 5W-30", "moy", "motor", "litr", 75000, 95000, [], "5W-30", ""),
+    ("Shell Helix HX7 10W-40", "moy", "motor", "litr", 70000, 90000, [], "10W-40", "moy"),
+    ("Lukoil Lux 10W-40", "moy", "motor", "litr", 50000, 65000, [], "10W-40", ""),
+    ("Motor moyi 0W-20 (quyma)", "moy", "motor", "litr", 90000, 120000, [], "0W-20", ""),
+    ("Karobka moyi (1 L)", "moy", "karobka", "litr", 60000, 85000, [], "", ""),
+    ("Moy filtri — GM original", "filtr", "moy", "dona", 38000, 45000, CHEV, "", ""),
+    ("Moy filtri — Koreya", "filtr", "moy", "dona", 24000, 30000, CHEV, "", ""),
+    ("Moy filtri — Xitoy (arzon)", "filtr", "moy", "dona", 15000, 20000, CHEV, "", ""),
+    ("Moy filtri — Spark/Matiz/Damas", "filtr", "moy", "dona", 22000, 28000, SMALL, "", ""),
+    ("Havo filtri — Cobalt/Nexia 3", "filtr", "havo", "dona", 28000, 35000, ["Cobalt", "Nexia 3"], "", ""),
+    ("Havo filtri — Gentra/Lacetti", "filtr", "havo", "dona", 30000, 38000, ["Gentra", "Lacetti"], "", ""),
+    ("Havo filtri — Damas/Labo", "filtr", "havo", "dona", 20000, 25000, ["Damas", "Labo"], "", ""),
+    ("Salon filtri — Cobalt/Nexia 3", "filtr", "salon", "dona", 22000, 30000, ["Cobalt", "Nexia 3"], "", ""),
+    ("Salon filtri — Gentra/Lacetti", "filtr", "salon", "dona", 22000, 30000, ["Gentra", "Lacetti"], "", ""),
+    ("Moy filtri — universal (xitoy)", "filtr", "moy", "dona", 25000, 35000, [], "", ""),
+    ("Havo filtri — kesiladigan", "filtr", "havo", "dona", 20000, 30000, [], "", ""),
+    ("Salon filtri — kesiladigan", "filtr", "salon", "dona", 18000, 28000, [], "", ""),
+    ("Reduktor filtri — xitoy", "filtr", "reduktor", "dona", 60000, 80000, [], "", ""),
+    ("Yoqilg'i filtri", "filtr", "yoqilgi", "dona", 40000, 45000, [], "", ""),
+    ("Antifriz (1 L)", "boshqa", "", "litr", 18000, 25000, [], "", ""),
+    ("Tormoz suyuqligi", "boshqa", "", "dona", 25000, 35000, [], "", ""),
+    ("Salfetka / ochistitel", "boshqa", "", "dona", 5000, 10000, [], "", ""),
+    ("Moy almashtirish xizmati", "xizmat", "", "dona", 0, 0, [], "", ""),
 ]
 
-CAR_MODELS = ["Cobalt", "Nexia 3", "Gentra", "Lacetti", "Spark", "Damas", "Matiz", "Nexia 2", "Malibu",
-              "Tracker", "Onix", "Captiva", "Labo", "Monza", "Equinox", "Kia K5", "Hyundai Elantra",
-              "BYD Chazor", "BYD Song Plus", "Chery Tiggo", "Haval", "Jetour"]
+CAR_MODELS = [("Cobalt", "chevrolet"), ("Nexia 3", "chevrolet"), ("Gentra", "chevrolet"), ("Lacetti", "chevrolet"),
+              ("Spark", "chevrolet"), ("Matiz", "chevrolet"), ("Nexia 2", "chevrolet"), ("Malibu", "chevrolet"),
+              ("Tracker", "chevrolet"), ("Onix", "chevrolet"), ("Captiva", "chevrolet"), ("Monza", "chevrolet"),
+              ("Equinox", "chevrolet"), ("Damas", "damas"), ("Labo", "damas"),
+              ("BYD Chazor", "xitoy"), ("BYD Song Plus", "xitoy"), ("Chery Tiggo", "xitoy"), ("Chery Arrizo", "xitoy"),
+              ("Haval", "xitoy"), ("Jetour", "xitoy"), ("Changan", "xitoy"), ("Geely", "xitoy"),
+              ("Kia K5", "boshqa"), ("Hyundai Elantra", "boshqa")]
 
+# (ism, lavozim, login, parol) — parollarni birinchi kirishda almashtiring
 SEED_EMPLOYEES = [
-    ("Usta 1", "usta"), ("Usta 2", "usta"),
-    ("Zamena sotuvchisi", "sotuvchi"), ("Kassir", "kassir"),
+    ("Usta 1", "usta", None, None), ("Usta 2", "usta", None, None),
+    ("Zamena sotuvchisi", "sotuvchi", "sotuvchi", "1111"), ("Kassir", "kassir", "kassir", "2222"),
+    ("Rahbar", "admin", "admin", "1234"),
 ]
 
 
@@ -162,24 +200,32 @@ def init_db():
         CON.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)", (k, v))
     migrate()
     if not CON.execute("SELECT 1 FROM products LIMIT 1").fetchone():
-        for n, c, k, u, cost, price, models in SEED_PRODUCTS:
-            pid = CON.execute("INSERT INTO products(name,category,kind,unit,cost,price,stock) VALUES(?,?,?,?,?,?,?)",
-                              (n, c, k, u, cost, price, 0 if c == "xizmat" else 50)).lastrowid
+        for n, c, k, u, cost, price, models, grade, bonus in SEED_PRODUCTS:
+            pid = CON.execute("""INSERT INTO products(name,category,kind,unit,cost,price,stock,grade,bonus_kinds)
+                                 VALUES(?,?,?,?,?,?,?,?,?)""",
+                              (n, c, k, u, cost, price, 0 if c == "xizmat" else 50, grade, bonus)).lastrowid
             for m in models:
                 CON.execute("INSERT OR IGNORE INTO product_models(product_id,model) VALUES(?,?)", (pid, m))
-    if not CON.execute("SELECT 1 FROM car_models LIMIT 1").fetchone():
-        for i, m in enumerate(CAR_MODELS):
-            CON.execute("INSERT OR IGNORE INTO car_models(name,sort) VALUES(?,?)", (m, i))
+    for i, (m, g) in enumerate(CAR_MODELS):
+        CON.execute("INSERT OR IGNORE INTO car_models(name,sort,grp) VALUES(?,?,?)", (m, i, g))
+        CON.execute("UPDATE car_models SET grp=? WHERE name=? AND COALESCE(grp,'')=''", (g, m))
     if not CON.execute("SELECT 1 FROM employees LIMIT 1").fetchone():
-        for n, r in SEED_EMPLOYEES:
-            CON.execute("INSERT INTO employees(name,role) VALUES(?,?)", (n, r))
+        for n, r, login, pw in SEED_EMPLOYEES:
+            CON.execute("INSERT INTO employees(name,role,login,pass_hash) VALUES(?,?,?,?)",
+                        (n, r, login, hash_pw(pw) if pw else None))
+    if not CON.execute("SELECT 1 FROM employees WHERE role='admin' AND COALESCE(login,'')!=''").fetchone():
+        CON.execute("INSERT INTO employees(name,role,login,pass_hash) VALUES('Rahbar','admin','admin',?)", (hash_pw("1234"),))
     CON.commit()
 
 
 def migrate():
     """Eski bazaga yangi ustunlarni qo'shadi."""
     for table, col, ddl in (("cars", "transmission", "TEXT DEFAULT ''"), ("cars", "color", "TEXT DEFAULT ''"),
-                            ("products", "kind", "TEXT DEFAULT ''")):
+                            ("cars", "plate_exception", "INTEGER DEFAULT 0"),
+                            ("products", "kind", "TEXT DEFAULT ''"), ("products", "grade", "TEXT DEFAULT ''"),
+                            ("products", "bonus_kinds", "TEXT DEFAULT ''"), ("products", "image", "TEXT"),
+                            ("products", "image_v", "INTEGER DEFAULT 0"), ("car_models", "grp", "TEXT DEFAULT ''"),
+                            ("employees", "login", "TEXT"), ("employees", "pass_hash", "TEXT")):
         cols = {r[1] for r in CON.execute(f"PRAGMA table_info({table})")}
         if col not in cols:
             CON.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
@@ -207,6 +253,95 @@ def setting_num(s, k):
 
 def bump():
     VERSION["v"] += 1
+
+
+# ---------------------------------------------------------------- kirish (login)
+
+def hash_pw(pw, salt=None):
+    salt = salt or secrets.token_hex(8)
+    return salt + "$" + hashlib.sha256((salt + pw).encode()).hexdigest()
+
+
+def check_pw(pw, stored):
+    if not stored or "$" not in stored:
+        return False
+    return secrets.compare_digest(hash_pw(pw, stored.split("$", 1)[0]), stored)
+
+
+def user_public(e):
+    return {"id": e["id"], "name": e["name"], "role": e["role"]}
+
+
+FAILS = {}      # ip -> noto'g'ri urinishlar vaqti
+LOOKED = {}     # token -> sotuvchi raqam bo'yicha ochgan mashinalar
+LOOKUPS = {}    # token -> raqam qidirish vaqtlari (bazani ko'chirib olishdan himoya)
+
+
+def api_login(b, ip):
+    t = time.time()
+    FAILS[ip] = [x for x in FAILS.get(ip, []) if t - x < 300]
+    if len(FAILS[ip]) >= 5:
+        raise ApiError("Ko'p marta noto'g'ri kiritildi. 5 daqiqadan keyin urinib ko'ring.", 429)
+    login = (b.get("login") or "").strip().lower()
+    e = row("SELECT * FROM employees WHERE lower(login)=? AND active=1", (login,)) if login else None
+    if not e or e["role"] == "usta" or not check_pw(b.get("password") or "", e["pass_hash"]):
+        FAILS[ip].append(t)
+        raise ApiError("Login yoki parol noto'g'ri", 401)
+    tok = secrets.token_urlsafe(24)
+    CON.execute("INSERT INTO sessions(token,employee_id,created_at) VALUES(?,?,?)", (tok, e["id"], now()))
+    return {"token": tok, "user": user_public(e)}
+
+
+def session_user(token):
+    if not token:
+        return None
+    return row("""SELECT e.id, e.name, e.role FROM sessions s JOIN employees e ON e.id=s.employee_id
+                  WHERE s.token=? AND e.active=1""", (token,))
+
+
+SELLER_HEADS = {"bootstrap", "version", "me", "logout", "cars", "today", "orders"}
+KASSA_HEADS = SELLER_HEADS | {"customers", "products", "purchases", "stock_moves", "inventories", "car_models"}
+
+
+def check_access(user, token, method, parts):
+    """Rollar: sotuvchi (planshet) — mijozlar bazasini ko'ra olmaydi; kassir — kassa; admin — hammasi."""
+    role, head = user["role"], parts[0]
+    rid = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+    action = parts[2] if len(parts) > 2 else None
+    deny = ApiError("Bu amal uchun huquq yo'q", 403)
+    if role == "admin":
+        return
+    if role == "kassir":
+        if head not in KASSA_HEADS or (head == "car_models" and method != "GET"):
+            raise deny
+        return
+    if role != "sotuvchi" or head not in SELLER_HEADS:
+        raise deny
+    if head == "cars":
+        if method == "GET" and len(parts) > 1 and parts[1] == "lookup":
+            t = time.time()
+            LOOKUPS[token] = [x for x in LOOKUPS.get(token, []) if t - x < 600] + [t]
+            if len(LOOKUPS[token]) > 60:
+                raise ApiError("Juda ko'p qidiruv. Biroz kuting.", 429)
+            return
+        if rid and rid not in LOOKED.get(token, set()):
+            raise deny          # faqat raqami terilgan mashina
+    if head == "orders":
+        if (method == "GET" and not rid) or action == "close":
+            raise deny
+        if rid:
+            o = row("SELECT status FROM orders WHERE id=?", (rid,))
+            if not o or o["status"] not in ("jarayonda", "tayyor"):
+                raise deny
+
+
+def scrub(x):
+    """Planshet javoblaridan mijoz telefoni va keshbekini olib tashlaydi."""
+    if isinstance(x, list):
+        return [scrub(i) for i in x]
+    if isinstance(x, dict):
+        return {k: scrub(v) for k, v in x.items() if k not in ("customer_phone", "customer_cashback")}
+    return x
 
 
 # ---------------------------------------------------------------- customers/cars
@@ -240,12 +375,14 @@ def car_full(car_id):
     return car
 
 
-def api_car_lookup(q):
+def api_car_lookup(q, token=None):
     plate = norm_plate(q.get("plate", [""])[0])
     if not plate:
         raise ApiError("Raqam kiriting")
     car = row("SELECT id FROM cars WHERE plate=?", (plate,))
-    return {"plate": plate, "car": car_full(car["id"]) if car else None}
+    if car and token:
+        LOOKED.setdefault(token, set()).add(car["id"])
+    return {"plate": plate, "valid": bool(PLATE_OK.fullmatch(plate)), "car": car_full(car["id"]) if car else None}
 
 
 def clean_car_fields(b):
@@ -254,7 +391,8 @@ def clean_car_fields(b):
     if tr not in ("", "AT", "MT"):
         raise ApiError("Uzatmalar qutisi A/T yoki M/T bo'lishi kerak")
     if model:
-        CON.execute("INSERT OR IGNORE INTO car_models(name,sort) VALUES(?,1000)", (model,))
+        grp = b.get("model_grp") if b.get("model_grp") in GROUP_FILTERS else ""
+        CON.execute("INSERT OR IGNORE INTO car_models(name,sort,grp) VALUES(?,1000,?)", (model, grp))
     return model, tr, (b.get("color") or "").strip()
 
 
@@ -265,17 +403,23 @@ def require_phone(b):
     return phone
 
 
-def api_car_create(b):
+def api_car_create(b, token=None):
     plate = norm_plate(b.get("plate"))
-    if len(plate) < 4:
-        raise ApiError("Mashina raqami noto'g'ri")
+    exc = 1 if b.get("exception") else 0
+    if len(plate) < 3:
+        raise ApiError("Mashina raqami juda qisqa")
+    if not exc and not PLATE_OK.fullmatch(plate):
+        raise ApiError("Raqam formati noto'g'ri: 01 A 123 BC yoki 01 123 ABC bo'lishi kerak. "
+                       "Chet el mashinasi bo'lsa «Istisno»ni bosing.")
     if row("SELECT 1 FROM cars WHERE plate=?", (plate,)):
         raise ApiError("Bu raqam bazada bor")
     phone = require_phone(b)
     model, tr, color = clean_car_fields(b)
     cid = get_or_create_customer((b.get("customer_name") or "").strip(), phone)
-    cur = CON.execute("INSERT INTO cars(plate,model,transmission,color,customer_id,created_at) VALUES(?,?,?,?,?,?)",
-                      (plate, model, tr, color, cid, now()))
+    cur = CON.execute("""INSERT INTO cars(plate,model,transmission,color,customer_id,created_at,plate_exception)
+                         VALUES(?,?,?,?,?,?,?)""", (plate, model, tr, color, cid, now(), exc))
+    if token:
+        LOOKED.setdefault(token, set()).add(cur.lastrowid)
     return car_full(cur.lastrowid)
 
 
@@ -334,15 +478,19 @@ def api_product_save(b, pid=None):
     cat = b.get("category") or "boshqa"
     if cat not in ("moy", "filtr", "boshqa", "xizmat"):
         raise ApiError("Kategoriya noto'g'ri")
+    bonus = b.get("bonus_kinds") or []
+    if isinstance(bonus, str):
+        bonus = bonus.split(",")
     vals = (name, cat, b.get("unit") or "dona", float(b.get("cost") or 0),
             int(float(b.get("price") or 0)), (b.get("barcode") or "").strip(), 1 if b.get("active", 1) else 0,
-            (b.get("kind") or "").strip())
+            (b.get("kind") or "").strip(), norm_grade(b.get("grade")),
+            ",".join(k for k in bonus if k in FILTER_KINDS))
     if pid:
-        CON.execute("UPDATE products SET name=?,category=?,unit=?,cost=?,price=?,barcode=?,active=?,kind=? WHERE id=?",
-                    vals + (pid,))
+        CON.execute("""UPDATE products SET name=?,category=?,unit=?,cost=?,price=?,barcode=?,active=?,kind=?,
+                       grade=?,bonus_kinds=? WHERE id=?""", vals + (pid,))
     else:
-        cur = CON.execute("""INSERT INTO products(name,category,unit,cost,price,barcode,active,kind,stock)
-                             VALUES(?,?,?,?,?,?,?,?,0)""", vals)
+        cur = CON.execute("""INSERT INTO products(name,category,unit,cost,price,barcode,active,kind,grade,bonus_kinds,stock)
+                             VALUES(?,?,?,?,?,?,?,?,?,?,0)""", vals)
         pid = cur.lastrowid
         if float(b.get("stock") or 0):
             move_stock(pid, float(b["stock"]), "prixod", "boshlang'ich", float(b.get("cost") or 0))
@@ -351,17 +499,35 @@ def api_product_save(b, pid=None):
         for m in b["models"] or []:
             if str(m).strip():
                 CON.execute("INSERT OR IGNORE INTO product_models(product_id,model) VALUES(?,?)", (pid, str(m).strip()))
+    if "image" in b:
+        img = b.get("image") or None
+        if img and (not re.match(r"data:image/(jpeg|png|webp);base64,", img) or len(img) > 2_000_000):
+            raise ApiError("Rasm JPG/PNG bo'lishi va 1.5 MB dan oshmasligi kerak")
+        CON.execute("UPDATE products SET image=?, image_v=COALESCE(image_v,0)+1 WHERE id=?", (img, pid))
     return products_full(pid)[0]
 
 
+def norm_grade(g):
+    """'5w30' -> '5W-30'"""
+    g = re.sub(r"\s", "", str(g or "")).upper()
+    m = re.fullmatch(r"(\d{1,2})W-?(\d{1,2})", g)
+    return f"{m.group(1)}W-{m.group(2)}" if m else g
+
+
+PRODUCT_COLS = ("id,name,category,unit,cost,price,stock,barcode,active,kind,grade,bonus_kinds,image_v,"
+                "(image IS NOT NULL AND image!='') AS has_img")
+
+
 def products_full(pid=None):
-    ps = rows("SELECT * FROM products" + (" WHERE id=?" if pid else "") + " ORDER BY category, kind, name",
+    ps = rows(f"SELECT {PRODUCT_COLS} FROM products" + (" WHERE id=?" if pid else "") + " ORDER BY category, kind, name",
               (pid,) if pid else ())
     pm = {}
     for r in rows("SELECT * FROM product_models"):
         pm.setdefault(r["product_id"], []).append(r["model"])
     for p in ps:
         p["models"] = sorted(pm.get(p["id"], []))
+        p["bonus_kinds"] = [k for k in (p["bonus_kinds"] or "").split(",") if k]
+        p["image_url"] = f"/api/products/{p['id']}/image?v={p['image_v']}" if p.pop("has_img") else ""
     return ps
 
 
@@ -447,7 +613,9 @@ def write_items(oid, items):
     CON.execute("UPDATE orders SET subtotal=?, cost=? WHERE id=?", (subtotal, round(cost_total), oid))
 
 
-def api_order_create(b):
+def api_order_create(b, user=None):
+    if user and user["role"] != "usta":
+        b["seller_id"] = user["id"]
     typ = b.get("type") or "zamena"
     s = settings()
     car_id = b.get("car_id")
@@ -484,7 +652,7 @@ def api_order_create(b):
     if typ == "zamena" and mileage:
         CON.execute("UPDATE cars SET last_mileage=MAX(COALESCE(last_mileage,0),?) WHERE id=?", (mileage, car_id))
     if b.get("close") is not None:
-        return api_order_close(oid, b["close"])
+        return api_order_close(oid, b["close"], user)
     return load_order(oid)
 
 
@@ -529,7 +697,9 @@ def api_order_cancel(oid):
     return load_order(oid)
 
 
-def api_order_close(oid, b):
+def api_order_close(oid, b, user=None):
+    if user:
+        b["cashier_id"] = user["id"]
     o = row("SELECT * FROM orders WHERE id=?", (oid,))
     if not o or o["status"] in ("yopilgan", "bekor"):
         raise ApiError("Zakaz yopiq yoki topilmadi")
@@ -606,10 +776,12 @@ def api_today():
                          AND date(o.created_at)=? GROUP BY e.id ORDER BY n DESC""", (d,))
     by_master_month = rows(f"""SELECT e.id, e.name, COUNT(*) n {base}
                          AND substr(o.created_at,1,7)=? GROUP BY e.id ORDER BY n DESC""", (m,))
-    orders = [load_order(r["id"]) for r in rows(
-        "SELECT id FROM orders WHERE type='zamena' AND status!='bekor' AND date(created_at)=? ORDER BY id DESC", (d,))]
+    open_ = [load_order(r["id"]) for r in rows(
+        "SELECT id FROM orders WHERE type='zamena' AND status IN ('jarayonda','tayyor') ORDER BY id DESC")]
+    done = [load_order(r["id"]) for r in rows(
+        "SELECT id FROM orders WHERE type='zamena' AND status='yopilgan' AND date(closed_at)=? ORDER BY closed_at DESC", (d,))]
     return {"date": d, "count": total["n"], "oil": total["oil"], "by_master": by_master,
-            "by_master_month": by_master_month, "orders": orders}
+            "by_master_month": by_master_month, "open": open_, "done": done}
 
 
 # ---------------------------------------------------------------- inventory
@@ -721,7 +893,7 @@ def api_report_payroll(q):
     kpi_total = sal_total = 0
     p = (frm, to)
     w = "o.status='yopilgan' AND date(o.closed_at) BETWEEN ? AND ?"
-    for e in rows("SELECT * FROM employees ORDER BY role, name"):
+    for e in rows("SELECT id, name, role, phone, base_salary, active FROM employees ORDER BY role, name"):
         if e["role"] == "usta":
             col, per_car, pct = "master_id", "master_kpi_per_car", "master_kpi_percent"
         elif e["role"] == "sotuvchi":
@@ -757,38 +929,60 @@ def api_salary_pay(b):
 
 # ---------------------------------------------------------------- employees/settings
 
+EMP_COLS = "id, name, role, phone, base_salary, active, COALESCE(login,'') AS login, (pass_hash IS NOT NULL) AS has_password"
+
+
 def api_employee_save(b, eid=None):
     name = (b.get("name") or "").strip()
     role = b.get("role")
-    if not name or role not in ("usta", "sotuvchi", "kassir"):
+    if not name or role not in ROLES:
         raise ApiError("Ism va lavozim kerak")
-    vals = (name, role, b.get("phone") or "", int(float(b.get("base_salary") or 0)), 1 if b.get("active", 1) else 0)
+    login = (b.get("login") or "").strip().lower() or None
+    if role == "usta":
+        login = None
+    if login:
+        if not re.fullmatch(r"[a-z0-9_.]{3,20}", login):
+            raise ApiError("Login: 3–20 ta lotin harfi yoki raqam")
+        if row("SELECT 1 FROM employees WHERE lower(login)=? AND id!=?", (login, eid or 0)):
+            raise ApiError("Bu login band")
+    vals = (name, role, b.get("phone") or "", int(float(b.get("base_salary") or 0)), 1 if b.get("active", 1) else 0, login)
     if eid:
-        CON.execute("UPDATE employees SET name=?,role=?,phone=?,base_salary=?,active=? WHERE id=?", vals + (eid,))
+        CON.execute("UPDATE employees SET name=?,role=?,phone=?,base_salary=?,active=?,login=? WHERE id=?", vals + (eid,))
     else:
-        eid = CON.execute("INSERT INTO employees(name,role,phone,base_salary,active) VALUES(?,?,?,?,?)", vals).lastrowid
-    return row("SELECT * FROM employees WHERE id=?", (eid,))
+        eid = CON.execute("INSERT INTO employees(name,role,phone,base_salary,active,login) VALUES(?,?,?,?,?,?)", vals).lastrowid
+    pw = b.get("password") or ""
+    if pw:
+        if len(pw) < 4:
+            raise ApiError("Parol kamida 4 ta belgi bo'lsin")
+        CON.execute("UPDATE employees SET pass_hash=? WHERE id=?", (hash_pw(pw), eid))
+        CON.execute("DELETE FROM sessions WHERE employee_id=?", (eid,))
+    if login and not row("SELECT pass_hash FROM employees WHERE id=?", (eid,))["pass_hash"]:
+        raise ApiError("Login berilgan xodimga parol ham kiriting")
+    if not b.get("active", 1):
+        CON.execute("DELETE FROM sessions WHERE employee_id=?", (eid,))
+    return row(f"SELECT {EMP_COLS} FROM employees WHERE id=?", (eid,))
 
 
 def public_settings():
     s = settings()
-    s["has_pin"] = bool(s.pop("admin_pin", ""))
+    s.pop("admin_pin", None)
     return s
 
 
-def api_bootstrap():
+def api_bootstrap(user):
     return {
         "settings": public_settings(),
-        "employees": rows("SELECT * FROM employees ORDER BY role, name"),
+        "employees": rows("SELECT id, name, role, active FROM employees ORDER BY role, name"),
         "products": products_full(),
         "car_models": rows("SELECT * FROM car_models ORDER BY sort, name"),
+        "group_filters": GROUP_FILTERS,
+        "me": user_public(user),
         "version": VERSION["v"],
     }
 
 
 # ---------------------------------------------------------------- HTTP
 
-ADMIN_PREFIXES = ("/api/reports", "/api/salary", "/api/settings", "/api/expenses")
 MIME = {".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8",
         ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml",
         ".png": "image/png", ".webmanifest": "application/manifest+json", ".ico": "image/x-icon"}
@@ -844,6 +1038,21 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def serve_image(self, pid):
+        with LOCK:
+            r = row("SELECT image FROM products WHERE id=?", (pid,))
+        img = (r or {}).get("image") or ""
+        mm = re.match(r"data:(image/[a-z]+);base64,(.*)", img, re.S)
+        if not mm:
+            return self.send_error(404)
+        data = base64.b64decode(mm.group(2))
+        self.send_response(200)
+        self.send_header("Content-Type", mm.group(1))
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def handle_any(self, method):
         u = urlparse(self.path)
         path = u.path.rstrip("/") or "/"
@@ -852,18 +1061,29 @@ class Handler(BaseHTTPRequestHandler):
                 return self.serve_static(u.path)
             return self.send_error(405)
         q = parse_qs(u.query)
+        m = re.fullmatch(r"/api/products/(\d+)/image", path)
+        if m and method == "GET":
+            return self.serve_image(int(m.group(1)))
         try:
             b = self.body() if method in ("POST", "PUT") else {}
-            if path.startswith(ADMIN_PREFIXES) and not (method == "GET" and path == "/api/settings"):
-                pin = settings().get("admin_pin") or ""
-                if pin and self.headers.get("X-Pin", "") != pin:
-                    raise ApiError("PIN kod noto'g'ri", 403)
+            parts = path.split("/")[2:]
             with LOCK:
                 try:
-                    res = route(method, path, q, b)
-                    if method != "GET":
+                    if path == "/api/login" and method == "POST":
+                        res = api_login(b, self.client_address[0])
                         CON.commit()
-                        bump()
+                    else:
+                        token = self.headers.get("X-Token", "")
+                        user = session_user(token)
+                        if not user:
+                            raise ApiError("Avval tizimga kiring", 401)
+                        check_access(user, token, method, parts)
+                        res = route(method, path, q, b, user, token)
+                        if user["role"] == "sotuvchi" and parts[0] in ("today", "orders"):
+                            res = scrub(res)
+                        if method != "GET":
+                            CON.commit()
+                            bump()
                 except Exception:
                     CON.rollback()
                     raise
@@ -878,7 +1098,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": f"Server xatosi: {e}"}, 500)
 
 
-def route(method, path, q, b):
+def route(method, path, q, b, user, token):
     parts = path.split("/")[2:]  # after /api/
     head = parts[0]
     rid = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
@@ -886,15 +1106,21 @@ def route(method, path, q, b):
 
     if head == "version":
         return {"v": VERSION["v"]}
+    if head == "me":
+        return user_public(user)
+    if head == "logout":
+        CON.execute("DELETE FROM sessions WHERE token=?", (token,))
+        LOOKED.pop(token, None)
+        return {"ok": True}
     if head == "bootstrap":
-        return api_bootstrap()
+        return api_bootstrap(user)
     if head == "cars":
         if method == "GET" and len(parts) > 1 and parts[1] == "lookup":
-            return api_car_lookup(q)
+            return api_car_lookup(q, token)
         if method == "GET" and rid:
             return car_full(rid)
         if method == "POST":
-            return api_car_create(b)
+            return api_car_create(b, token)
         if method == "PUT" and rid:
             return api_car_update(rid, b)
     if head == "customers":
@@ -913,6 +1139,15 @@ def route(method, path, q, b):
                         (rid, amt, "qo'lda", now()))
             return api_customer(rid)
     if head == "car_models":
+        if method == "PUT" and rid:
+            if b.get("grp") not in GROUP_FILTERS:
+                raise ApiError("Guruh noto'g'ri")
+            CON.execute("UPDATE car_models SET grp=? WHERE id=?", (b["grp"], rid))
+        if method == "POST":
+            name = (b.get("name") or "").strip()
+            if not name or b.get("grp") not in GROUP_FILTERS:
+                raise ApiError("Model nomi va guruhi kerak")
+            CON.execute("INSERT OR IGNORE INTO car_models(name,sort,grp) VALUES(?,1000,?)", (name, b["grp"]))
         return rows("SELECT * FROM car_models ORDER BY sort, name")
     if head == "products":
         if method == "GET":
@@ -934,11 +1169,11 @@ def route(method, path, q, b):
         if method == "GET":
             return api_orders(q)
         if method == "POST" and not rid:
-            return api_order_create(b)
+            return api_order_create(b, user)
         if method == "PUT" and rid:
             return api_order_update(rid, b)
         if method == "POST" and rid and action == "close":
-            return api_order_close(rid, b)
+            return api_order_close(rid, b, user)
         if method == "POST" and rid and action == "cancel":
             return api_order_cancel(rid)
     if head == "today":
@@ -957,7 +1192,7 @@ def route(method, path, q, b):
             return api_inventory_close(rid)
     if head == "employees":
         if method == "GET":
-            return rows("SELECT * FROM employees ORDER BY role, name")
+            return rows(f"SELECT {EMP_COLS} FROM employees ORDER BY role, name")
         if method == "POST":
             return api_employee_save(b)
         if method == "PUT" and rid:
@@ -988,11 +1223,6 @@ def route(method, path, q, b):
                 if k in DEFAULT_SETTINGS:
                     CON.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (k, str(v)))
             return public_settings()
-    if head == "pin" and method == "POST":
-        pin = settings().get("admin_pin") or ""
-        if pin and b.get("pin") != pin:
-            raise ApiError("PIN kod noto'g'ri", 403)
-        return {"ok": True}
     raise ApiError("Topilmadi", 404)
 
 
@@ -1019,6 +1249,7 @@ def main():
         print(f"   Kassa PC:  http://{ip}:{PORT}/kassa")
     print(f"   Shu kompyuterda: http://localhost:{PORT}/kassa")
     print(f" Baza: {DB_PATH}")
+    print(" Birinchi kirish: admin / 1234 (Xodimlar bo'limida parolni almashtiring)")
     print(" To'xtatish: Ctrl+C")
     print("=" * 56)
     try:

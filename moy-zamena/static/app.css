@@ -197,3 +197,88 @@ body.pl .modal .btn{min-height:56px;font-size:18px}
   .tile.xl{font-size:21px;min-height:84px}
   .big2{font-size:21px}
 }
+
+/* ---------------- Yangi ko'rinish: alohida yumaloq tugmalar, foydalanuvchi, login ---------------- */
+.top{height:auto;min-height:64px;padding-block:8px;gap:10px}
+.brand{display:flex;align-items:center}
+.tabs{gap:8px;padding:2px}
+.tabs button{background:rgba(255,255,255,.16);border:1.5px solid rgba(255,255,255,.28);opacity:1;border-radius:14px;padding:10px 18px;font-weight:600;box-shadow:0 2px 0 rgba(0,0,0,.08)}
+.tabs button:hover{background:rgba(255,255,255,.26)}
+.tabs button.on{background:#fff;color:var(--primary-d);border-color:#fff;box-shadow:0 3px 10px rgba(0,0,0,.15)}
+.tabs button.on .badge{background:var(--primary);color:#fff}
+.user-chip{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.16);border:1.5px solid rgba(255,255,255,.28);color:#fff;border-radius:999px;padding:4px 14px 4px 4px;cursor:pointer;font-weight:600;font-size:16px;max-width:220px}
+.user-chip .av{width:34px;height:34px;border-radius:50%;background:#fff;color:var(--primary-d);display:grid;place-items:center;font-weight:800;flex:none}
+.user-chip .un{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.pl .brand{display:flex!important}
+.login-wrap{display:flex;justify-content:center;padding-top:6vh}
+.login{width:100%;max-width:440px;padding:24px}
+.login h2{font-size:26px;margin-bottom:18px}
+.newsale{width:100%;margin-bottom:16px;font-size:24px;min-height:84px}
+.sec-h{margin:4px 0 10px}
+.sec-h h2{margin:0}
+.cnt-pill{display:inline-grid;place-items:center;min-width:34px;height:34px;padding:0 8px;border-radius:17px;background:var(--primary);color:#fff;font-size:18px;vertical-align:2px}
+.done-list summary{cursor:pointer;font-size:17px;padding:4px 0}
+.plate-mini.sm{font-size:15px;padding:1px 6px}
+.pmsg{min-height:26px;margin-top:8px;font-size:17px;color:var(--muted)}
+.pmsg.ok{color:var(--ok);font-weight:600}
+.pmsg.err{color:var(--bad);font-weight:600}
+.plate-box.bad{border-color:var(--bad);box-shadow:0 0 0 3px rgba(214,69,69,.15)}
+.btn.xl small{display:block;font-size:13px;font-weight:500;opacity:.8}
+.btn.warn{background:#fff4e0;color:#a86400;box-shadow:inset 0 0 0 2px #e8930c}
+.hist2 .hrow{display:flex;gap:14px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line)}
+.hist2 .hrow:last-child{border:0}
+.hdate{display:flex;flex-direction:column;min-width:108px;font-variant-numeric:tabular-nums}
+.hdate span{color:var(--muted);font-size:14px}
+.big3{font-size:18px}
+/* moy tanlash */
+.oil-btn{width:100%;min-height:110px;font-size:26px}
+.oil-sel{display:flex;align-items:center;gap:14px}
+.bonus-note{display:inline-block;margin-top:6px;background:#f3e8ff;color:#7a3db8;border-radius:8px;padding:4px 10px;font-weight:600;font-size:15px}
+.oimg{width:72px;height:72px;border-radius:12px;object-fit:contain;background:#fff;border:1px solid var(--line);flex:none;display:grid;place-items:center}
+.oimg.ph{background:linear-gradient(160deg,#fff4e0,#ffe2ae);color:#8a5a00;border-color:#f3d79a;font-size:15px;text-align:center;line-height:1.1}
+.oimg.sm{width:40px;height:40px;border-radius:8px;font-size:10px}
+.oimg.lg{width:96px;height:96px}
+.oimg.xl{width:160px;height:160px;font-size:16px}
+.opick{display:grid;grid-template-columns:150px 1fr;gap:14px;min-height:50vh}
+.grades{display:flex;flex-direction:column;gap:8px}
+.gchip{border:2px solid var(--line);background:#fff;border-radius:14px;padding:14px 10px;font-size:19px;font-weight:700;cursor:pointer;color:var(--text)}
+.gchip.on{border-color:var(--primary);background:var(--primary);color:#fff}
+.ogrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;align-content:start}
+.ocard2{display:flex;flex-direction:column;align-items:center;gap:6px;border:2px solid var(--line);background:#fff;border-radius:16px;padding:12px;cursor:pointer;text-align:center;color:var(--text)}
+.ocard2 .oimg{width:120px;height:120px}
+.ocard2.on{border-color:var(--primary);box-shadow:inset 0 0 0 2px var(--primary);background:var(--soft)}
+.on1{font-weight:700;font-size:17px;line-height:1.2}
+.on2{color:var(--muted);font-size:14px}
+.obonus{background:#f3e8ff;color:#7a3db8;border-radius:8px;padding:2px 8px;font-size:13px;font-weight:600}
+.lit-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.tiles.lit{grid-template-columns:repeat(4,minmax(80px,1fr));flex:1}
+.lit-man{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:600;color:var(--muted)}
+.lit-man input{width:110px;min-height:68px;font-size:24px;font-weight:700;text-align:center;border-radius:14px}
+/* filtr tanlash */
+.ftile small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.fcard{border:2px solid var(--line);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:10px;background:#fff}
+.fcard.on{border-color:var(--primary);background:var(--soft)}
+.fmain{border:0;background:none;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:4px;padding:0;color:var(--text)}
+.fqty{display:flex;align-items:center;justify-content:space-between}
+.qbtn:disabled{opacity:.35}
+.pform{display:flex;gap:16px;align-items:flex-start}
+.pimg{display:flex;flex-direction:column;align-items:center}
+@media (max-width:700px){
+  .opick{grid-template-columns:1fr}
+  .grades{flex-direction:row;flex-wrap:wrap}
+  .gchip{padding:10px 14px;font-size:17px}
+  .ogrid{grid-template-columns:repeat(2,1fr)}
+  .ocard2 .oimg{width:96px;height:96px}
+  .pform{flex-direction:column;align-items:stretch}
+}
+@media (max-width:600px){
+  .top{gap:6px}
+  .user-chip{padding:3px;max-width:none}
+  .user-chip .un{display:none}
+  .tabs button{padding:8px 11px;font-size:15px}
+  .tiles.lit{grid-template-columns:repeat(4,1fr)}
+  .lit-man input{width:90px}
+  .hdate{min-width:86px}
+  .oil-sel{flex-wrap:wrap}
+}

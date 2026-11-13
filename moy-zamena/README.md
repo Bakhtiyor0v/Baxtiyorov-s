@@ -29,17 +29,35 @@ Ma'lumotlar `data/zamena.db` faylida. **Zaxira nusxa** — shu faylni vaqti-vaqt
 ## Jarayon
 | Kim | Qayerda | Nima qiladi |
 |---|---|---|
-| Zamena sotuvchisi | Planshet | **Mijoz kiritish** → raqam katta ekran klaviaturasida (`75 400 NAA`, `01 A 123 BC`) → bazada bo'lmasa: mashina nomi, **A/T yoki M/T**, rangi, **telefon (majburiy)** `+998 88 226 15 00`, ismi → probeg, **usta (majburiy)**, moy + litr, filtrlar → **«Almashtirilmoqda»** |
-| Kassir | Do'kon PC → Navbat | Mashina darhol navbatda chiqadi (ovoz bilan). Summani aytadi, kerak bo'lsa mahsulot qo'shadi/bonus qiladi, chegirma, keshbekdan to'lash, naqd/karta → **To'landi** |
-| Rahbar | PC → Hisobot / Oylik | Foyda, KPI, oylik, inventarizatsiya |
+| Zamena sotuvchisi | Planshet | Raqam → mijoz/mashina → probeg, usta, moy, litr, filtrlar → **Kassaga o'tkazish** |
+| Kassir | Do'kon PC → Navbat | Mashina darhol navbatda chiqadi (ovoz bilan). Summani aytadi, chegirma, keshbek, naqd/karta → **To'landi** |
+| Rahbar | PC → Hisobot / Oylik | Foyda, KPI, oylik, inventarizatsiya, sozlamalar |
 
-Planshetda faqat 2 bo'lim bor: **Mijoz kiritish** va **Bugungi tarix**. Mijoz (telefon) kiritilmasa zamena qilib bo'lmaydi.
-Kim ishlayotgani (zamena sotuvchisi) planshetda bir marta tanlanadi va eslab qolinadi.
+## Kirish (login) va rollar
+Planshet ham, kassa ham **login va parol** bilan ochiladi (bir vaqtda 2–3 kishi ishlashi mumkin). Chap burchakda kim kirgani ko'rinadi.
 
-### Filtrlar mashinaga qarab
-- Kassa → Ombor → filtrni oching → **Turi** (moy / havo / salon / yoqilg'i) va **qaysi mashinalarga mos**ligini belgilang.
-- Planshetda «Moy filtri» tugmasi bosilganda shu mashinaga mos filtr avtomatik qo'shiladi. 3 marta bosilsa — 3 ta.
-- Mos filtr belgilanmagan mashina (masalan, xitoy mashinalari — o'zimizning filtrni kesib qo'yamiz): sotuvchi istalgan filtrni tanlaydi, «keyingi safar avtomatik qo'shilsin» belgisi bilan tizim uni shu model uchun eslab qoladi.
+| Rol | Nima qila oladi |
+|---|---|
+| Zamena sotuvchisi | Planshet: jarayondagi mashinalar va yangi sotuv. **Mijozlar ro'yxatini ko'ra olmaydi** — faqat raqami terilgan bitta mashina chiqadi (bazani o'g'irlashdan himoya) |
+| Kassir | Kassa: navbat, to'lov, sotuv, ombor, mijozlar, inventarizatsiya |
+| Rahbar | Hammasi: hisobot, oylik/KPI, xodimlar (login-parol berish), sozlamalar |
+
+Birinchi kirish: **admin / 1234** — darhol Xodimlar bo'limida parolni almashtiring va sotuvchi/kassirga login bering.
+Ustalar tizimga kirmaydi — sotuvchi ularni planshetda belgilaydi. Sotuvchi KPI'si o'zi kiritgan mashinalar bo'yicha hisoblanadi.
+
+## Planshet jarayoni
+1. Asosiy ekran — **Jarayonda**: hozir ishlanayotgan mashinalar (Tayyor / Tahrirlash).
+2. **＋ Yangi sotuv** → raqam: `01 A 123 BC` yoki `01 123 ABC`. Boshqa format xato beradi; chet el mashinasi uchun **Istisno**.
+3. Mashina bazada bo'lsa — mijoz ma'lumoti va **moy almashtirish tarixi** (sana, km, qaysi moy, necha litr, filtrlar).
+   Bo'lmasa — mashina nomi, A/T yoki M/T, rangi, telefon (majburiy).
+4. **Motor moyi** bosiladi → chapda yopishqoqlik (10W-40, 5W-30…) → o'sha turdagi moylar rasmi bilan.
+5. Litr: 2.5 / 3 / 3.5 / 4 yoki qo'lda.
+6. Filtrlar mashina turiga qarab: **Chevrolet** — moy, havo, salon; **Xitoy** — moy, salon, havo, reduktor; **Damas/Labo** — moy, havo.
+   Chevrolet/Damas uchun faqat shu modelga mos filtrlar (2–3 firma) chiqadi; xitoy mashinalarida qo'lda tanlanadi.
+7. **Kassaga o'tkazish.**
+
+Kassa → Ombor → moyni oching: **rasm yuklash**, yopishqoqlik va **«shu moy bilan tekin filtr»** (bonus) belgilanadi.
+Kassa → Sozlamalar → **Mashina turlari**: har bir model Chevrolet / Xitoy / Damas / Boshqa.
 
 ## Pul hisobi
 - **Xizmat haqi** odatda 0 — foyda mahsulotdan.
@@ -60,7 +78,10 @@ Kim ishlayotgani (zamena sotuvchisi) planshetda bir marta tanlanadi va eslab qol
 - **Inventarizatsiya** (oyda 1 marta): tizimdagi qoldiq ko'rinadi, sanalganini yozasiz → kamomad/ortiqcha summasi → yakunlaganda qoldiq to'g'rilanadi.
 
 ## Xavfsizlik
-Sozlamalarda **rahbar PIN** qo'ying — Hisobot, Oylik, Xodimlar, Sozlamalar shu PIN bilan ochiladi.
+- Har bir xodim o'z login-paroli bilan kiradi; parollar bazada shifrlangan (tuzli SHA-256) holda saqlanadi.
+- 5 marta noto'g'ri parol — 5 daqiqa kutish.
+- Planshet (sotuvchi) mijozlar ro'yxatini, telefon raqamlarini (jarayondagi ro'yxatda), hisobotlarni ocha olmaydi;
+  raqam bo'yicha qidiruv ham cheklangan (10 daqiqada 60 ta).
 
 ## Fayllar
 ```
