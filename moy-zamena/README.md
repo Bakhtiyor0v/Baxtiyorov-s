@@ -21,7 +21,7 @@ Demo'da ma'lumotlar faqat shu brauzerda saqlanadi («Tozalash» — boshidan bos
 3. Oynada chiqqan manzilni oching: kompyuterda `http://localhost:8090`, planshetda `http://<kompyuter-IP>:8090`.
 4. Birinchi kirish: **admin / 1234** → Xodimlar bo'limida parolni almashtiring, sotuvchi va kassirga login bering.
 
-Ma'lumotlar `data/zamena.db` faylida — **zaxira nusxasini** vaqti-vaqti bilan oling.
+Ma'lumotlar `data/zamena.db` faylida. Server har kuni **avtomatik zaxira nusxa** oladi: `data/backup/` (oxirgi 14 kun). Vaqti-vaqti bilan bu papkani flesh yoki Telegram'ga ham nusxalang.
 
 ## Kassa paneli (chap menyu)
 | Bo'lim | Nima bor |

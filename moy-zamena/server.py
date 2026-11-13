@@ -1797,8 +1797,29 @@ def local_ips():
     return sorted(ips) or ["127.0.0.1"]
 
 
+def backup_loop():
+    """Har kuni bazaning nusxasini data/backup/ ga oladi (oxirgi 14 tasi saqlanadi)."""
+    folder = os.path.join(os.path.dirname(DB_PATH), "backup")
+    while True:
+        try:
+            os.makedirs(folder, exist_ok=True)
+            target = os.path.join(folder, f"zamena-{date.today().isoformat()}.db")
+            if not os.path.exists(target):
+                with LOCK:
+                    dst = sqlite3.connect(target)
+                    CON.backup(dst)
+                    dst.close()
+                old = sorted(f for f in os.listdir(folder) if f.startswith("zamena-") and f.endswith(".db"))
+                for f in old[:-14]:
+                    os.remove(os.path.join(folder, f))
+        except Exception as e:  # noqa
+            print("Zaxira nusxa olinmadi:", e)
+        time.sleep(3600)
+
+
 def main():
     init_db()
+    threading.Thread(target=backup_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print("=" * 56)
     print(" Moy almashtirish tizimi ishga tushdi")
@@ -1806,7 +1827,7 @@ def main():
         print(f"   Planshet:  http://{ip}:{PORT}/planshet")
         print(f"   Kassa PC:  http://{ip}:{PORT}/kassa")
     print(f"   Shu kompyuterda: http://localhost:{PORT}/kassa")
-    print(f" Baza: {DB_PATH}")
+    print(f" Baza: {DB_PATH}  (har kuni zaxira: data/backup/)")
     print(" Birinchi kirish: admin / 1234 (Xodimlar bo'limida parolni almashtiring)")
     print(" To'xtatish: Ctrl+C")
     print("=" * 56)
