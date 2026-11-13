@@ -106,6 +106,26 @@ CREATE TABLE IF NOT EXISTS salary_payments(
   amount INTEGER, note TEXT DEFAULT '', created_at TEXT);
 CREATE TABLE IF NOT EXISTS expenses(
   id INTEGER PRIMARY KEY, title TEXT, amount INTEGER, created_at TEXT);
+CREATE TABLE IF NOT EXISTS payments(id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL, method TEXT NOT NULL,
+  amount INTEGER NOT NULL, shift_id INTEGER, created_at TEXT);
+CREATE TABLE IF NOT EXISTS shifts(id INTEGER PRIMARY KEY, employee_id INTEGER, opened_at TEXT, closed_at TEXT,
+  open_cash INTEGER DEFAULT 0, counted INTEGER, expected INTEGER, closed_by INTEGER, note TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS cash_tx(id INTEGER PRIMARY KEY, shift_id INTEGER, kind TEXT NOT NULL, category TEXT,
+  method TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT DEFAULT '', ref_type TEXT, ref_id INTEGER,
+  employee_id INTEGER, created_at TEXT);
+CREATE TABLE IF NOT EXISTS debt_tx(id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL, order_id INTEGER,
+  amount INTEGER NOT NULL, note TEXT DEFAULT '', employee_id INTEGER, created_at TEXT);
+CREATE TABLE IF NOT EXISTS suppliers(id INTEGER PRIMARY KEY, name TEXT NOT NULL, phone TEXT DEFAULT '',
+  note TEXT DEFAULT '', debt INTEGER DEFAULT 0, active INTEGER DEFAULT 1, created_at TEXT);
+CREATE TABLE IF NOT EXISTS supplier_tx(id INTEGER PRIMARY KEY, supplier_id INTEGER NOT NULL, purchase_id INTEGER,
+  amount INTEGER NOT NULL, note TEXT DEFAULT '', employee_id INTEGER, created_at TEXT);
+CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY, supplier_id INTEGER, total INTEGER DEFAULT 0,
+  discount INTEGER DEFAULT 0, paid INTEGER DEFAULT 0, note TEXT DEFAULT '', employee_id INTEGER, created_at TEXT);
+CREATE TABLE IF NOT EXISTS purchase_items(id INTEGER PRIMARY KEY, purchase_id INTEGER NOT NULL, product_id INTEGER,
+  name TEXT, qty REAL, cost REAL, price INTEGER);
+CREATE INDEX IF NOT EXISTS ix_payments_order ON payments(order_id);
+CREATE INDEX IF NOT EXISTS ix_payments_shift ON payments(shift_id);
+CREATE INDEX IF NOT EXISTS ix_cash_created ON cash_tx(created_at);
 CREATE INDEX IF NOT EXISTS ix_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS ix_orders_closed ON orders(closed_at);
 CREATE INDEX IF NOT EXISTS ix_items_order ON order_items(order_id);
@@ -213,6 +233,12 @@ def init_db():
         for n, r, login, pw in SEED_EMPLOYEES:
             CON.execute("INSERT INTO employees(name,role,login,pass_hash) VALUES(?,?,?,?)",
                         (n, r, login, hash_pw(pw) if pw else None))
+    # eski «xarajatlar» jadvalini kassa harakatlariga ko'chirish (bir marta)
+    if not CON.execute("SELECT 1 FROM settings WHERE key='expenses_migrated'").fetchone():
+        for e in CON.execute("SELECT * FROM expenses").fetchall():
+            CON.execute("""INSERT INTO cash_tx(kind,category,method,amount,note,created_at)
+                           VALUES('chiqim','Boshqa xarajat','naqd',?,?,?)""", (e["amount"], e["title"], e["created_at"]))
+        CON.execute("INSERT INTO settings(key,value) VALUES('expenses_migrated','1')")
     if not CON.execute("SELECT 1 FROM employees WHERE role='admin' AND COALESCE(login,'')!=''").fetchone():
         CON.execute("INSERT INTO employees(name,role,login,pass_hash) VALUES('Rahbar','admin','admin',?)", (hash_pw("1234"),))
     CON.commit()
@@ -225,7 +251,11 @@ def migrate():
                             ("products", "kind", "TEXT DEFAULT ''"), ("products", "grade", "TEXT DEFAULT ''"),
                             ("products", "bonus_kinds", "TEXT DEFAULT ''"), ("products", "image", "TEXT"),
                             ("products", "image_v", "INTEGER DEFAULT 0"), ("car_models", "grp", "TEXT DEFAULT ''"),
-                            ("employees", "login", "TEXT"), ("employees", "pass_hash", "TEXT")):
+                            ("employees", "login", "TEXT"), ("employees", "pass_hash", "TEXT"),
+                            ("customers", "debt", "INTEGER DEFAULT 0"), ("orders", "shift_id", "INTEGER"),
+                            ("orders", "parent_id", "INTEGER"), ("orders", "paid_debt", "INTEGER DEFAULT 0"),
+                            ("orders", "refunded", "INTEGER DEFAULT 0"), ("orders", "change_given", "INTEGER DEFAULT 0"),
+                            ("order_items", "src_item_id", "INTEGER")):
         cols = {r[1] for r in CON.execute(f"PRAGMA table_info({table})")}
         if col not in cols:
             CON.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
@@ -300,7 +330,8 @@ def session_user(token):
 
 
 SELLER_HEADS = {"bootstrap", "version", "me", "logout", "cars", "today", "orders"}
-KASSA_HEADS = SELLER_HEADS | {"customers", "products", "purchases", "stock_moves", "inventories", "car_models"}
+KASSA_HEADS = SELLER_HEADS | {"customers", "products", "purchases", "stock_moves", "inventories", "car_models",
+                              "shift", "shifts", "cash", "suppliers", "reports"}
 
 
 def check_access(user, token, method, parts):
@@ -313,6 +344,8 @@ def check_access(user, token, method, parts):
         return
     if role == "kassir":
         if head not in KASSA_HEADS or (head == "car_models" and method != "GET"):
+            raise deny
+        if head == "reports" and (len(parts) < 2 or parts[1] not in ("summary", "debts")):
             raise deny
         return
     if role != "sotuvchi" or head not in SELLER_HEADS:
@@ -454,8 +487,8 @@ def api_customers(q):
         (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.status='yopilgan') AS visits,
         (SELECT COALESCE(SUM(total),0) FROM orders o WHERE o.customer_id=c.id AND o.status='yopilgan') AS spent
         FROM customers c LEFT JOIN cars ON cars.customer_id=c.id
-        WHERE ?='' OR c.name LIKE ? OR c.phone LIKE ? OR cars.plate LIKE ?
-        GROUP BY c.id ORDER BY c.id DESC LIMIT 200""", (s, like, like, pl))
+        WHERE (?='' OR c.name LIKE ? OR c.phone LIKE ? OR cars.plate LIKE ?) AND (?='' OR COALESCE(c.debt,0)>0)
+        GROUP BY c.id ORDER BY c.id DESC LIMIT 300""", (s, like, like, pl, q.get("debt", [""])[0]))
 
 
 def api_customer(cid):
@@ -466,6 +499,8 @@ def api_customer(cid):
     c["orders"] = rows("""SELECT o.*, cars.plate FROM orders o LEFT JOIN cars ON cars.id=o.car_id
                           WHERE o.customer_id=? AND o.status!='bekor' ORDER BY o.id DESC LIMIT 50""", (cid,))
     c["cashback_tx"] = rows("SELECT * FROM cashback_tx WHERE customer_id=? ORDER BY id DESC LIMIT 50", (cid,))
+    c["debt_tx"] = rows("""SELECT t.*, e.name AS employee_name FROM debt_tx t LEFT JOIN employees e ON e.id=t.employee_id
+                          WHERE customer_id=? ORDER BY t.id DESC LIMIT 100""", (cid,))
     return c
 
 
@@ -548,28 +583,6 @@ def move_stock(pid, qty, kind, ref, cost=None):
                 (pid, qty, kind, str(ref), p["cost"] if cost is None else cost, now()))
 
 
-def api_purchase(b):
-    items = b.get("items") or []
-    if not items:
-        raise ApiError("Mahsulot yo'q")
-    ref = (b.get("supplier") or "prixod").strip()
-    for it in items:
-        pid = int(it["product_id"])
-        qty = float(it.get("qty") or 0)
-        cost = float(it.get("cost") or 0)
-        if qty <= 0:
-            continue
-        p = row("SELECT * FROM products WHERE id=?", (pid,))
-        old_stock = max(p["stock"], 0)
-        if cost > 0:
-            new_cost = (old_stock * p["cost"] + qty * cost) / (old_stock + qty)  # o'rtacha tannarx
-            CON.execute("UPDATE products SET cost=? WHERE id=?", (round(new_cost, 2), pid))
-        if it.get("price"):
-            CON.execute("UPDATE products SET price=? WHERE id=?", (int(float(it["price"])), pid))
-        move_stock(pid, qty, "prixod", ref, cost or p["cost"])
-    return {"ok": True}
-
-
 # ---------------------------------------------------------------- orders
 
 def load_order(oid):
@@ -585,6 +598,9 @@ def load_order(oid):
         raise ApiError("Zakaz topilmadi", 404)
     o["items"] = rows("SELECT * FROM order_items WHERE order_id=? ORDER BY id", (oid,))
     o["services"] = json.loads(o["services"] or "[]")
+    o["payments"] = rows("SELECT method, amount FROM payments WHERE order_id=? ORDER BY id", (oid,))
+    o["refunds"] = rows("SELECT id, total, closed_at FROM orders WHERE parent_id=? ORDER BY id", (oid,))
+    o["customer_debt"] = row("SELECT debt FROM customers WHERE id=?", (o["customer_id"],))["debt"] if o["customer_id"] else 0
     return o
 
 
@@ -697,53 +713,6 @@ def api_order_cancel(oid):
     return load_order(oid)
 
 
-def api_order_close(oid, b, user=None):
-    if user:
-        b["cashier_id"] = user["id"]
-    o = row("SELECT * FROM orders WHERE id=?", (oid,))
-    if not o or o["status"] in ("yopilgan", "bekor"):
-        raise ApiError("Zakaz yopiq yoki topilmadi")
-    s = settings()
-    discount = max(int(float(b.get("discount") or 0)), 0)
-    due = max(o["subtotal"] - discount, 0)
-    cb_used = max(int(float(b.get("cashback_used") or 0)), 0)
-    cust = row("SELECT * FROM customers WHERE id=?", (o["customer_id"],)) if o["customer_id"] else None
-    if cb_used:
-        if not cust:
-            raise ApiError("Keshbek uchun mijoz kerak")
-        if cb_used > cust["cashback"]:
-            raise ApiError("Keshbek balansi yetarli emas")
-        cb_used = min(cb_used, due)
-    total = due - cb_used
-    cash = int(float(b.get("paid_cash") or 0))
-    card = int(float(b.get("paid_card") or 0))
-    if cash == 0 and card == 0:
-        if b.get("method") == "karta":
-            card = total
-        else:
-            cash = total
-    over = cash + card - total
-    if over > 0 and cash >= over:  # mijozga qaytim berildi
-        cash -= over
-    if cash + card != total:
-        raise ApiError(f"To'lov summasi {total} bo'lishi kerak (kiritildi {cash + card})")
-    earned = 0
-    if cust:
-        earned = int(total * setting_num(s, "cashback_percent") / 100)
-        delta = earned - cb_used
-        CON.execute("UPDATE customers SET cashback=cashback+? WHERE id=?", (delta, cust["id"]))
-        if cb_used:
-            CON.execute("INSERT INTO cashback_tx(customer_id,order_id,amount,kind,created_at) VALUES(?,?,?,?,?)",
-                        (cust["id"], oid, -cb_used, "ishlatildi", now()))
-        if earned:
-            CON.execute("INSERT INTO cashback_tx(customer_id,order_id,amount,kind,created_at) VALUES(?,?,?,?,?)",
-                        (cust["id"], oid, earned, "yig'ildi", now()))
-    CON.execute("""UPDATE orders SET status='yopilgan', discount=?, cashback_used=?, cashback_earned=?,
-                   total=?, paid_cash=?, paid_card=?, cashier_id=?, closed_at=? WHERE id=?""",
-                (discount, cb_used, earned, total, cash, card, b.get("cashier_id"), now(), oid))
-    return load_order(oid)
-
-
 def api_orders(q):
     st = q.get("status", [""])[0]
     frm = q.get("from", [""])[0]
@@ -763,6 +732,14 @@ def api_orders(q):
     if q.get("type", [""])[0]:
         where.append("o.type=?")
         args.append(q["type"][0])
+    if q.get("cashier", [""])[0]:
+        where.append("o.cashier_id=?")
+        args.append(int(q["cashier"][0]))
+    s_ = (q.get("q", [""])[0] or "").strip()
+    if s_:
+        where.append("""(CAST(o.id AS TEXT)=? OR o.car_id IN (SELECT id FROM cars WHERE plate LIKE ?)
+                        OR o.customer_id IN (SELECT id FROM customers WHERE name LIKE ? OR phone LIKE ?))""")
+        args += [s_.lstrip("#"), f"%{norm_plate(s_)}%", f"%{s_}%", f"%{re.sub(r'[^0-9]', '', s_) or s_}%"]
     ids = [r["id"] for r in rows(f"SELECT o.id FROM orders o WHERE {' AND '.join(where)} ORDER BY o.id DESC LIMIT 300", args)]
     return [load_order(i) for i in ids]
 
@@ -866,7 +843,8 @@ def api_report_profit(q):
         FROM order_items i JOIN orders o ON o.id=i.order_id WHERE {w}
         GROUP BY i.product_id ORDER BY profit DESC""", p)
     pay = api_report_payroll({"from": [frm], "to": [to]})
-    expenses = row("SELECT COALESCE(SUM(amount),0) s FROM expenses WHERE date(created_at) BETWEEN ? AND ?", p)["s"]
+    expenses = row(f"""SELECT COALESCE(SUM(amount),0) s FROM cash_tx WHERE kind='chiqim' AND date(created_at) BETWEEN ? AND ?
+                        AND category IN ({','.join('?' * len(EXPENSE_CATS))})""", p + EXPENSE_CATS)["s"]
     gross = head["revenue"] - head["cost"]
     oil = by_cat.get("moy", {}).get("profit", 0)
     filt = by_cat.get("filtr", {}).get("profit", 0)
@@ -920,11 +898,546 @@ def api_report_payroll(q):
     return {"from": frm, "to": to, "rows": out, "kpi_total": kpi_total, "salary_total": sal_total}
 
 
-def api_salary_pay(b):
+def api_salary_pay(b, user=None):
+    e = row("SELECT name FROM employees WHERE id=?", (int(b["employee_id"]),))
+    method = b.get("method") or "naqd"
+    if method in MONEY_METHODS and money(b["amount"]) > 0:
+        CON.execute("""INSERT INTO cash_tx(shift_id,kind,category,method,amount,note,ref_type,ref_id,employee_id,created_at)
+                       VALUES(?,'chiqim',?,?,?,?,'employee',?,?,?)""",
+                    (shift_id_or_none(), CAT_SALARY, method, money(b["amount"]),
+                     f"{e['name'] if e else ''}: {b['period_from']} — {b['period_to']}", int(b["employee_id"]),
+                     user["id"] if user else None, now()))
     CON.execute("""INSERT INTO salary_payments(employee_id,period_from,period_to,amount,note,created_at)
                    VALUES(?,?,?,?,?,?)""", (int(b["employee_id"]), b["period_from"], b["period_to"],
                                            int(float(b["amount"])), b.get("note") or "", now()))
     return {"ok": True}
+
+
+
+
+# ================================================================ KASSA (Bito uslubida)
+# To'lov usullari (Bito: Naqd F6, Terminal F7, Kartadan o'tkazma) + qarzga sotish
+METHODS = {"naqd": "Naqd", "terminal": "Terminal", "otkazma": "Kartadan o'tkazma", "qarz": "Qarzga"}
+MONEY_METHODS = ("naqd", "terminal", "otkazma")
+CHIQIM_CATS = ["Ijara", "Kommunal xizmatlar", "Elektr", "Gaz", "Telefon va aloqa", "Reklama", "Yo'lkira",
+               "Ofis xarajatlari", "Ish haqi", "Avans", "Usta puli", "Inkassatsiya (rahbarga)", "Boshqa xarajat"]
+KIRIM_CATS = ["Kassaga pul qo'yish", "Qarz olish", "Boshqa kirim"]
+# Foyda hisobotida «xarajat» deb olinadiganlari (ish haqi oylik/KPI'da alohida hisoblanadi)
+EXPENSE_CATS = ("Ijara", "Kommunal xizmatlar", "Elektr", "Gaz", "Telefon va aloqa", "Reklama", "Yo'lkira",
+                "Ofis xarajatlari", "Boshqa xarajat")
+CAT_DEBT_IN = "Mijoz qarzini to'lash"
+CAT_SUP_OUT = "Yetkazib beruvchiga to'lov"
+CAT_SUP_IN = "Yetkazib beruvchidan pul olish"
+CAT_SALARY = "Ish haqi"
+
+
+def money(v):
+    try:
+        return int(round(float(v or 0)))
+    except (TypeError, ValueError):
+        raise ApiError("Summa noto'g'ri")
+
+
+def fmt_sum(n):
+    return f"{int(n):,}".replace(",", " ")
+
+
+# ---------------------------------------------------------------- smena
+def current_shift():
+    return row("""SELECT s.*, e.name AS employee_name FROM shifts s LEFT JOIN employees e ON e.id=s.employee_id
+                  WHERE s.closed_at IS NULL ORDER BY s.id DESC LIMIT 1""")
+
+
+def need_shift():
+    sh = current_shift()
+    if not sh:
+        raise ApiError("Smena ochilmagan. Avval smenani oching.", 409)
+    return sh
+
+
+def shift_id_or_none():
+    sh = current_shift()
+    return sh["id"] if sh else None
+
+
+def shift_summary(sh):
+    sid = sh["id"]
+    pay = {r["method"]: r["s"] for r in rows(
+        "SELECT method, COALESCE(SUM(amount),0) s FROM payments WHERE shift_id=? GROUP BY method", (sid,))}
+    cin = {r["method"]: r["s"] for r in rows(
+        "SELECT method, COALESCE(SUM(amount),0) s FROM cash_tx WHERE shift_id=? AND kind='kirim' GROUP BY method", (sid,))}
+    cout = {r["method"]: r["s"] for r in rows(
+        "SELECT method, COALESCE(SUM(amount),0) s FROM cash_tx WHERE shift_id=? AND kind='chiqim' GROUP BY method", (sid,))}
+    sales = row("SELECT COUNT(*) n, COALESCE(SUM(total),0) s FROM orders WHERE shift_id=? AND type!='qaytarish' AND status='yopilgan'", (sid,))
+    refunds = row("SELECT COUNT(*) n, COALESCE(-SUM(total),0) s FROM orders WHERE shift_id=? AND type='qaytarish'", (sid,))
+    methods = {}
+    for m in MONEY_METHODS + ("qarz",):
+        methods[m] = {"sales": pay.get(m, 0), "in": cin.get(m, 0), "out": cout.get(m, 0),
+                      "balance": pay.get(m, 0) + cin.get(m, 0) - cout.get(m, 0)}
+    out = dict(sh)
+    out.update({"methods": methods, "sales_count": sales["n"], "sales_total": sales["s"],
+                "refund_count": refunds["n"], "refund_total": refunds["s"],
+                "expected_cash": (sh["open_cash"] or 0) + methods["naqd"]["balance"]})
+    return out
+
+
+def api_shift_open(b, user):
+    if current_shift():
+        raise ApiError("Smena allaqachon ochiq")
+    sid = CON.execute("INSERT INTO shifts(employee_id,opened_at,open_cash,note) VALUES(?,?,?,?)",
+                      (user["id"], now(), max(money(b.get("open_cash")), 0), b.get("note") or "")).lastrowid
+    return shift_summary(row("SELECT s.*, e.name AS employee_name FROM shifts s LEFT JOIN employees e ON e.id=s.employee_id WHERE s.id=?", (sid,)))
+
+
+def api_shift_close(b, user):
+    sh = need_shift()
+    sm = shift_summary(sh)
+    counted = money(b.get("counted")) if b.get("counted") not in (None, "") else sm["expected_cash"]
+    CON.execute("UPDATE shifts SET closed_at=?, counted=?, expected=?, closed_by=?, note=? WHERE id=?",
+                (now(), counted, sm["expected_cash"], user["id"], b.get("note") or sh.get("note") or "", sh["id"]))
+    return api_shift(sh["id"])
+
+
+def api_shift(sid):
+    sh = row("""SELECT s.*, e.name AS employee_name, c.name AS closed_by_name FROM shifts s
+                LEFT JOIN employees e ON e.id=s.employee_id LEFT JOIN employees c ON c.id=s.closed_by WHERE s.id=?""", (sid,))
+    if not sh:
+        raise ApiError("Smena topilmadi", 404)
+    return shift_summary(sh)
+
+
+def api_shifts():
+    return [api_shift(r["id"]) for r in rows("SELECT id FROM shifts ORDER BY id DESC LIMIT 60")]
+
+
+# ---------------------------------------------------------------- to'lovlar
+def normalize_payments(b, total):
+    pays = {}
+    if "payments" in b:
+        for p in b.get("payments") or []:
+            m = p.get("method")
+            if m not in METHODS:
+                raise ApiError("To'lov usuli noto'g'ri")
+            a = money(p.get("amount"))
+            if a < 0:
+                raise ApiError("Summa manfiy bo'lishi mumkin emas")
+            pays[m] = pays.get(m, 0) + a
+    else:  # eski format: paid_cash / paid_card
+        cash, card = money(b.get("paid_cash")), money(b.get("paid_card"))
+        if cash == 0 and card == 0:
+            if b.get("method") == "karta":
+                card = total
+            else:
+                cash = total
+        pays = {"naqd": cash, "terminal": card}
+    return {m: a for m, a in pays.items() if a}
+
+
+def api_order_close(oid, b, user=None):
+    o = row("SELECT * FROM orders WHERE id=?", (oid,))
+    if not o or o["status"] in ("yopilgan", "bekor"):
+        raise ApiError("Zakaz yopiq yoki topilmadi")
+    sh = need_shift()
+    s = settings()
+    if o["type"] == "sotuv" and "customer_id" in b:
+        cid = b.get("customer_id") or None
+        if cid and not row("SELECT 1 FROM customers WHERE id=?", (cid,)):
+            raise ApiError("Mijoz topilmadi")
+        CON.execute("UPDATE orders SET customer_id=? WHERE id=?", (cid, oid))
+        o["customer_id"] = cid
+    discount = max(money(b.get("discount")), 0)
+    due = max(o["subtotal"] - discount, 0)
+    cb_used = max(money(b.get("cashback_used")), 0)
+    cust = row("SELECT * FROM customers WHERE id=?", (o["customer_id"],)) if o["customer_id"] else None
+    if cb_used:
+        if not cust:
+            raise ApiError("Keshbek uchun mijoz kerak")
+        if cb_used > cust["cashback"]:
+            raise ApiError("Keshbek balansi yetarli emas")
+        cb_used = min(cb_used, due)
+    total = due - cb_used
+    pays = normalize_payments(b, total)
+    paid = sum(pays.values())
+    change = 0
+    if paid > total:                                   # naqddan qaytim
+        over = paid - total
+        if pays.get("naqd", 0) >= over:
+            pays["naqd"] -= over
+            change = over
+        else:
+            raise ApiError(f"To'lov ortiqcha: {fmt_sum(total)} kerak, {fmt_sum(paid)} kiritildi")
+    if sum(pays.values()) != total:
+        raise ApiError(f"To'lov yetarli emas: {fmt_sum(total)} kerak, {fmt_sum(sum(pays.values()))} kiritildi")
+    debt = pays.get("qarz", 0)
+    if debt and not cust:
+        raise ApiError("Qarzga sotish uchun mijozni tanlang")
+    for m, a in pays.items():
+        if a:
+            CON.execute("INSERT INTO payments(order_id,method,amount,shift_id,created_at) VALUES(?,?,?,?,?)",
+                        (oid, m, a, sh["id"], now()))
+    if debt:
+        CON.execute("UPDATE customers SET debt=COALESCE(debt,0)+? WHERE id=?", (debt, cust["id"]))
+        CON.execute("INSERT INTO debt_tx(customer_id,order_id,amount,note,employee_id,created_at) VALUES(?,?,?,?,?,?)",
+                    (cust["id"], oid, debt, f"Chek #{oid} — qarzga", user["id"] if user else None, now()))
+    earned = 0
+    if cust:
+        earned = int((total - debt) * setting_num(s, "cashback_percent") / 100)
+        CON.execute("UPDATE customers SET cashback=cashback+? WHERE id=?", (earned - cb_used, cust["id"]))
+        if cb_used:
+            CON.execute("INSERT INTO cashback_tx(customer_id,order_id,amount,kind,created_at) VALUES(?,?,?,?,?)",
+                        (cust["id"], oid, -cb_used, "ishlatildi", now()))
+        if earned:
+            CON.execute("INSERT INTO cashback_tx(customer_id,order_id,amount,kind,created_at) VALUES(?,?,?,?,?)",
+                        (cust["id"], oid, earned, "yig'ildi", now()))
+    CON.execute("""UPDATE orders SET status='yopilgan', discount=?, cashback_used=?, cashback_earned=?, total=?,
+                   paid_cash=?, paid_card=?, paid_debt=?, change_given=?, cashier_id=?, shift_id=?, closed_at=? WHERE id=?""",
+                (discount, cb_used, earned, total, pays.get("naqd", 0), pays.get("terminal", 0) + pays.get("otkazma", 0),
+                 debt, change, user["id"] if user else b.get("cashier_id"), sh["id"], now(), oid))
+    return load_order(oid)
+
+
+def api_order_refund(oid, b, user):
+    o = load_order(oid)
+    if o["status"] != "yopilgan" or o["type"] == "qaytarish":
+        raise ApiError("Faqat to'langan chekni qaytarish mumkin")
+    sh = need_shift()
+    method = b.get("method") or "naqd"
+    if method not in METHODS:
+        raise ApiError("To'lov usuli noto'g'ri")
+    done = {r["src_item_id"]: r["q"] for r in rows(
+        """SELECT i.src_item_id, -SUM(i.qty) q FROM order_items i JOIN orders r ON r.id=i.order_id
+           WHERE r.parent_id=? GROUP BY i.src_item_id""", (oid,))}
+    lines = []
+    for it in b.get("items") or []:
+        src = next((x for x in o["items"] if x["id"] == int(it["item_id"])), None)
+        q = float(it.get("qty") or 0)
+        if not src or q <= 0:
+            continue
+        left = src["qty"] - (done.get(src["id"]) or 0)
+        if q > left + 1e-9:
+            raise ApiError(f"«{src['name']}»dan ko'pi bilan {left:g} qaytarish mumkin")
+        lines.append((src, q))
+    if not lines:
+        raise ApiError("Qaytariladigan mahsulotni tanlang")
+    gross = sum(round(src["price"] * q) for src, q in lines)
+    ratio = (o["total"] / o["subtotal"]) if o["subtotal"] else 0
+    amount = round(gross * ratio)
+    cust = row("SELECT * FROM customers WHERE id=?", (o["customer_id"],)) if o["customer_id"] else None
+    if method == "qarz":
+        if not cust:
+            raise ApiError("Mijoz yo'q — qarzdan ayirib bo'lmaydi")
+        if amount > (cust["debt"] or 0):
+            raise ApiError("Mijoz qarzi qaytariladigan summadan kam — boshqa usulni tanlang")
+    cost = sum(src["cost"] * q for src, q in lines)
+    rid = CON.execute("""INSERT INTO orders(type,parent_id,car_id,customer_id,status,services,note,subtotal,total,cost,
+                         paid_cash,paid_card,paid_debt,cashier_id,shift_id,created_at,closed_at)
+                         VALUES('qaytarish',?,?,?,'yopilgan','[]',?,?,?,?,?,?,?,?,?,?,?)""",
+                      (oid, o["car_id"], o["customer_id"], b.get("note") or "", -gross, -amount, -round(cost),
+                       -amount if method == "naqd" else 0, -amount if method in ("terminal", "otkazma") else 0,
+                       -amount if method == "qarz" else 0, user["id"], sh["id"], now(), now())).lastrowid
+    for src, q in lines:
+        CON.execute("""INSERT INTO order_items(order_id,product_id,name,category,qty,price,cost,is_bonus,src_item_id)
+                       VALUES(?,?,?,?,?,?,?,?,?)""", (rid, src["product_id"], src["name"], src["category"], -q,
+                                                      src["price"], src["cost"], src["is_bonus"], src["id"]))
+        if src["product_id"]:
+            move_stock(src["product_id"], q, "qaytarish", f"chek #{oid}")
+    if amount:
+        CON.execute("INSERT INTO payments(order_id,method,amount,shift_id,created_at) VALUES(?,?,?,?,?)",
+                    (rid, method, -amount, sh["id"], now()))
+    if method == "qarz":
+        CON.execute("UPDATE customers SET debt=debt-? WHERE id=?", (amount, cust["id"]))
+        CON.execute("INSERT INTO debt_tx(customer_id,order_id,amount,note,employee_id,created_at) VALUES(?,?,?,?,?,?)",
+                    (cust["id"], rid, -amount, f"Qaytarish #{rid} (chek #{oid})", user["id"], now()))
+    if cust and o["cashback_earned"] and o["total"]:
+        rev = round(o["cashback_earned"] * amount / o["total"])
+        if rev:
+            CON.execute("UPDATE customers SET cashback=MAX(cashback-?,0) WHERE id=?", (rev, cust["id"]))
+            CON.execute("INSERT INTO cashback_tx(customer_id,order_id,amount,kind,created_at) VALUES(?,?,?,?,?)",
+                        (cust["id"], rid, -rev, "qaytarish", now()))
+            CON.execute("UPDATE orders SET cashback_earned=? WHERE id=?", (-rev, rid))
+    CON.execute("UPDATE orders SET refunded=COALESCE(refunded,0)+? WHERE id=?", (amount, oid))
+    return load_order(rid)
+
+
+# ---------------------------------------------------------------- mijozlar (qarz)
+def api_customer_create(b):
+    name = (b.get("name") or "").strip()
+    phone = norm_phone(b.get("phone"))
+    if not name and not phone:
+        raise ApiError("Ism yoki telefon kiriting")
+    if phone and not re.fullmatch(r"998\d{9}", phone):
+        raise ApiError("Telefon raqami to'liq emas (+998 XX XXX XX XX)")
+    if phone and row("SELECT 1 FROM customers WHERE phone=?", (phone,)):
+        raise ApiError("Bu telefon raqamli mijoz bor")
+    cid = CON.execute("INSERT INTO customers(name,phone,note,created_at) VALUES(?,?,?,?)",
+                      (name, phone, b.get("note") or "", now())).lastrowid
+    return api_customer(cid)
+
+
+def api_customer_pay(cid, b, user):
+    c = row("SELECT * FROM customers WHERE id=?", (cid,))
+    if not c:
+        raise ApiError("Mijoz topilmadi", 404)
+    amount = money(b.get("amount"))
+    method = b.get("method") or "naqd"
+    if method not in MONEY_METHODS:
+        raise ApiError("To'lov usuli noto'g'ri")
+    if amount <= 0:
+        raise ApiError("Summani kiriting")
+    if amount > (c["debt"] or 0):
+        raise ApiError(f"Mijoz qarzi {fmt_sum(c['debt'] or 0)} so'm — undan ko'p olib bo'lmaydi")
+    sid = need_shift()["id"]
+    CON.execute("UPDATE customers SET debt=debt-? WHERE id=?", (amount, cid))
+    CON.execute("INSERT INTO debt_tx(customer_id,amount,note,employee_id,created_at) VALUES(?,?,?,?,?)",
+                (cid, -amount, b.get("note") or f"To'lov ({METHODS[method]})", user["id"], now()))
+    CON.execute("""INSERT INTO cash_tx(shift_id,kind,category,method,amount,note,ref_type,ref_id,employee_id,created_at)
+                   VALUES(?,'kirim',?,?,?,?,'customer',?,?,?)""",
+                (sid, CAT_DEBT_IN, method, amount, c["name"] or c["phone"], cid, user["id"], now()))
+    return api_customer(cid)
+
+
+def api_customer_debt_adjust(cid, b, user):
+    amount = money(b.get("amount"))
+    if not amount:
+        raise ApiError("Summani kiriting")
+    CON.execute("UPDATE customers SET debt=COALESCE(debt,0)+? WHERE id=?", (amount, cid))
+    CON.execute("INSERT INTO debt_tx(customer_id,amount,note,employee_id,created_at) VALUES(?,?,?,?,?)",
+                (cid, amount, b.get("note") or "Qo'lda tuzatish", user["id"], now()))
+    return api_customer(cid)
+
+
+# ---------------------------------------------------------------- yetkazib beruvchilar
+def api_suppliers(q):
+    s = (q.get("q", [""])[0] or "").strip()
+    like = f"%{s}%"
+    return rows("""SELECT sp.*, (SELECT COUNT(*) FROM purchases p WHERE p.supplier_id=sp.id) purchases,
+                   (SELECT MAX(created_at) FROM purchases p WHERE p.supplier_id=sp.id) last_purchase
+                   FROM suppliers sp WHERE ?='' OR sp.name LIKE ? OR sp.phone LIKE ? ORDER BY sp.name""", (s, like, like))
+
+
+def api_supplier(sid):
+    sp = row("SELECT * FROM suppliers WHERE id=?", (sid,))
+    if not sp:
+        raise ApiError("Yetkazib beruvchi topilmadi", 404)
+    sp["purchases"] = rows("SELECT * FROM purchases WHERE supplier_id=? ORDER BY id DESC LIMIT 100", (sid,))
+    sp["tx"] = rows("""SELECT t.*, e.name AS employee_name FROM supplier_tx t LEFT JOIN employees e ON e.id=t.employee_id
+                       WHERE supplier_id=? ORDER BY t.id DESC LIMIT 200""", (sid,))
+    return sp
+
+
+def api_supplier_save(b, sid=None, user=None):
+    name = (b.get("name") or "").strip()
+    if not name:
+        raise ApiError("Nomini kiriting")
+    phone = norm_phone(b.get("phone"))
+    if sid:
+        CON.execute("UPDATE suppliers SET name=?, phone=?, note=?, active=? WHERE id=?",
+                    (name, phone, b.get("note") or "", 1 if b.get("active", 1) else 0, sid))
+    else:
+        sid = CON.execute("INSERT INTO suppliers(name,phone,note,debt,created_at) VALUES(?,?,?,0,?)",
+                          (name, phone, b.get("note") or "", now())).lastrowid
+        opening = money(b.get("debt"))
+        if opening:
+            CON.execute("UPDATE suppliers SET debt=? WHERE id=?", (opening, sid))
+            CON.execute("INSERT INTO supplier_tx(supplier_id,amount,note,employee_id,created_at) VALUES(?,?,?,?,?)",
+                        (sid, opening, "Boshlang'ich qoldiq", user["id"] if user else None, now()))
+    return api_supplier(sid)
+
+
+def api_supplier_pay(sid, b, user):
+    sp = row("SELECT * FROM suppliers WHERE id=?", (sid,))
+    if not sp:
+        raise ApiError("Topilmadi", 404)
+    amount = money(b.get("amount"))
+    method = b.get("method") or "naqd"
+    if method not in MONEY_METHODS:
+        raise ApiError("To'lov usuli noto'g'ri")
+    if amount <= 0:
+        raise ApiError("Summani kiriting")
+    give = (b.get("direction") or "berish") == "berish"
+    delta = -amount if give else amount
+    CON.execute("UPDATE suppliers SET debt=debt+? WHERE id=?", (delta, sid))
+    CON.execute("INSERT INTO supplier_tx(supplier_id,amount,note,employee_id,created_at) VALUES(?,?,?,?,?)",
+                (sid, delta, b.get("note") or (f"To'lov ({METHODS[method]})" if give else f"Pul olindi ({METHODS[method]})"),
+                 user["id"], now()))
+    CON.execute("""INSERT INTO cash_tx(shift_id,kind,category,method,amount,note,ref_type,ref_id,employee_id,created_at)
+                   VALUES(?,?,?,?,?,?,'supplier',?,?,?)""",
+                (shift_id_or_none(), "chiqim" if give else "kirim", CAT_SUP_OUT if give else CAT_SUP_IN, method, amount,
+                 sp["name"], sid, user["id"], now()))
+    return api_supplier(sid)
+
+
+# ---------------------------------------------------------------- xaridlar
+def api_purchase(b, user=None):
+    items = [it for it in (b.get("items") or []) if float(it.get("qty") or 0) > 0]
+    if not items:
+        raise ApiError("Mahsulot qo'shing")
+    sid = b.get("supplier_id") or None
+    sp = row("SELECT * FROM suppliers WHERE id=?", (sid,)) if sid else None
+    if sid and not sp:
+        raise ApiError("Yetkazib beruvchi topilmadi")
+    gross = sum(round(float(it["qty"]) * float(it.get("cost") or 0)) for it in items)
+    discount = max(money(b.get("discount")), 0)
+    total = max(gross - discount, 0)
+    legacy = "payments" not in b
+    pays = {} if legacy else normalize_payments(b, total)
+    for m in pays:
+        if m not in MONEY_METHODS:
+            raise ApiError("Xarid uchun to'lov usuli: naqd, terminal yoki o'tkazma")
+    paid = total if legacy else sum(pays.values())
+    if paid > total:
+        raise ApiError("To'langan summa xarid summasidan ko'p")
+    if not sp and paid < total:
+        raise ApiError("Qarzga xarid uchun yetkazib beruvchini tanlang")
+    pid = CON.execute("""INSERT INTO purchases(supplier_id,total,discount,paid,note,employee_id,created_at)
+                         VALUES(?,?,?,?,?,?,?)""", (sid, total, discount, paid,
+                                                    (b.get("note") or b.get("supplier") or "").strip(),
+                                                    user["id"] if user else None, now())).lastrowid
+    for it in items:
+        prid = int(it["product_id"])
+        qty = float(it["qty"])
+        cost = float(it.get("cost") or 0)
+        p = row("SELECT * FROM products WHERE id=?", (prid,))
+        if not p:
+            raise ApiError("Mahsulot topilmadi")
+        old_stock = max(p["stock"], 0)
+        if cost > 0:
+            new_cost = (old_stock * p["cost"] + qty * cost) / (old_stock + qty)  # o'rtacha tannarx
+            CON.execute("UPDATE products SET cost=? WHERE id=?", (round(new_cost, 2), prid))
+        price = int(float(it["price"])) if it.get("price") not in (None, "", 0, "0") else None
+        if price:
+            CON.execute("UPDATE products SET price=? WHERE id=?", (price, prid))
+        CON.execute("INSERT INTO purchase_items(purchase_id,product_id,name,qty,cost,price) VALUES(?,?,?,?,?,?)",
+                    (pid, prid, p["name"], qty, cost or p["cost"], price or p["price"]))
+        move_stock(prid, qty, "prixod", f"xarid #{pid}" + (f" — {sp['name']}" if sp else ""), cost or p["cost"])
+    if sp:
+        CON.execute("UPDATE suppliers SET debt=debt+? WHERE id=?", (total - paid, sid))
+        CON.execute("INSERT INTO supplier_tx(supplier_id,purchase_id,amount,note,employee_id,created_at) VALUES(?,?,?,?,?,?)",
+                    (sid, pid, total, f"Xarid #{pid}", user["id"] if user else None, now()))
+        if paid:
+            CON.execute("INSERT INTO supplier_tx(supplier_id,purchase_id,amount,note,employee_id,created_at) VALUES(?,?,?,?,?,?)",
+                        (sid, pid, -paid, f"Xarid #{pid} uchun to'lov", user["id"] if user else None, now()))
+    for m, a in pays.items():
+        CON.execute("""INSERT INTO cash_tx(shift_id,kind,category,method,amount,note,ref_type,ref_id,employee_id,created_at)
+                       VALUES(?,'chiqim',?,?,?,?,'purchase',?,?,?)""",
+                    (shift_id_or_none(), CAT_SUP_OUT, m, a, f"Xarid #{pid}" + (f" — {sp['name']}" if sp else ""),
+                     pid, user["id"] if user else None, now()))
+    return api_purchase_get(pid)
+
+
+def api_purchase_get(pid):
+    p = row("""SELECT p.*, s.name AS supplier_name, e.name AS employee_name FROM purchases p
+               LEFT JOIN suppliers s ON s.id=p.supplier_id LEFT JOIN employees e ON e.id=p.employee_id WHERE p.id=?""", (pid,))
+    if not p:
+        raise ApiError("Xarid topilmadi", 404)
+    p["items"] = rows("SELECT * FROM purchase_items WHERE purchase_id=? ORDER BY id", (pid,))
+    return p
+
+
+def api_purchases(q):
+    frm, to = period_args(q)
+    sid = q.get("supplier_id", [""])[0]
+    return rows(f"""SELECT p.*, s.name AS supplier_name, e.name AS employee_name,
+                    (SELECT COUNT(*) FROM purchase_items i WHERE i.purchase_id=p.id) n
+                    FROM purchases p LEFT JOIN suppliers s ON s.id=p.supplier_id LEFT JOIN employees e ON e.id=p.employee_id
+                    WHERE date(p.created_at) BETWEEN ? AND ? {"AND p.supplier_id=?" if sid else ""}
+                    ORDER BY p.id DESC LIMIT 500""", (frm, to) + ((int(sid),) if sid else ()))
+
+
+# ---------------------------------------------------------------- kassa (pul harakati)
+def api_cash_add(b, user):
+    kind = b.get("kind")
+    if kind not in ("kirim", "chiqim"):
+        raise ApiError("Kirim yoki chiqimni tanlang")
+    cat = (b.get("category") or "").strip() or ("Boshqa kirim" if kind == "kirim" else "Boshqa xarajat")
+    method = b.get("method") or "naqd"
+    if method not in MONEY_METHODS:
+        raise ApiError("To'lov usuli noto'g'ri")
+    amount = money(b.get("amount"))
+    if amount <= 0:
+        raise ApiError("Summani kiriting")
+    sh = need_shift()
+    if kind == "chiqim" and method == "naqd":
+        have = shift_summary(sh)["expected_cash"]
+        if amount > have:
+            raise ApiError(f"Kassada naqd {fmt_sum(have)} so'm bor — undan ko'p chiqarib bo'lmaydi")
+    CON.execute("""INSERT INTO cash_tx(shift_id,kind,category,method,amount,note,employee_id,created_at)
+                   VALUES(?,?,?,?,?,?,?,?)""", (sh["id"], kind, cat, method, amount, b.get("note") or "", user["id"], now()))
+    return {"ok": True}
+
+
+def cash_balances():
+    pay = {r["method"]: r["s"] for r in rows("SELECT method, COALESCE(SUM(amount),0) s FROM payments GROUP BY method")}
+    tx = {(r["kind"], r["method"]): r["s"] for r in rows(
+        "SELECT kind, method, COALESCE(SUM(amount),0) s FROM cash_tx GROUP BY kind, method")}
+    opening = row("SELECT COALESCE(SUM(open_cash),0) s FROM shifts WHERE id=(SELECT MAX(id) FROM shifts)")["s"]
+    out = {}
+    for m in MONEY_METHODS:
+        out[m] = pay.get(m, 0) + tx.get(("kirim", m), 0) - tx.get(("chiqim", m), 0)
+    sh = current_shift()
+    out["naqd_kassada"] = shift_summary(sh)["expected_cash"] if sh else None
+    out["opening_last"] = opening
+    return out
+
+
+def api_cash(q):
+    frm, to = period_args(q)
+    p = (frm, to)
+    tx = rows("""SELECT t.*, e.name AS employee_name FROM cash_tx t LEFT JOIN employees e ON e.id=t.employee_id
+                 WHERE date(t.created_at) BETWEEN ? AND ? ORDER BY t.id DESC LIMIT 1000""", p)
+    sales = rows("""SELECT p.method, COALESCE(SUM(p.amount),0) s FROM payments p
+                    WHERE date(p.created_at) BETWEEN ? AND ? GROUP BY p.method""", p)
+    by_cat = rows("""SELECT kind, category, COALESCE(SUM(amount),0) s, COUNT(*) n FROM cash_tx
+                     WHERE date(created_at) BETWEEN ? AND ? GROUP BY kind, category ORDER BY s DESC""", p)
+    return {"from": frm, "to": to, "tx": tx, "sales": sales, "by_category": by_cat, "balances": cash_balances()}
+
+
+# ---------------------------------------------------------------- hisobotlar
+def api_report_summary(q, user):
+    frm, to = period_args(q)
+    p = (frm, to)
+    w = "o.status='yopilgan' AND date(o.closed_at) BETWEEN ? AND ?"
+    head = row(f"""SELECT COALESCE(SUM(o.total),0) revenue, COALESCE(SUM(o.total-o.cost),0) profit,
+        COALESCE(SUM(CASE WHEN o.type!='qaytarish' THEN 1 END),0) receipts,
+        COALESCE(SUM(CASE WHEN o.type='zamena' THEN 1 END),0) zamena,
+        COALESCE(SUM(CASE WHEN o.type='qaytarish' THEN -o.total END),0) refunds,
+        COALESCE(SUM(CASE WHEN o.type='qaytarish' THEN 1 END),0) refund_count,
+        COALESCE(SUM(o.discount),0) discount, COALESCE(SUM(o.cashback_used),0) cashback_used,
+        COALESCE(SUM(o.paid_debt),0) debt_given FROM orders o WHERE {w}""", p)
+    sales_only = row(f"SELECT COALESCE(SUM(o.total),0) s FROM orders o WHERE {w} AND o.type!='qaytarish'", p)["s"]
+    head["avg_check"] = round(sales_only / head["receipts"]) if head["receipts"] else 0
+    by_day = rows(f"""SELECT date(o.closed_at) d, COALESCE(SUM(o.total),0) revenue, COALESCE(SUM(o.total-o.cost),0) profit,
+                      COUNT(CASE WHEN o.type!='qaytarish' THEN 1 END) n FROM orders o WHERE {w} GROUP BY d ORDER BY d""", p)
+    by_method = rows("""SELECT p.method, COALESCE(SUM(p.amount),0) amount, COUNT(DISTINCT p.order_id) n FROM payments p
+                        JOIN orders o ON o.id=p.order_id WHERE o.status='yopilgan' AND date(o.closed_at) BETWEEN ? AND ?
+                        GROUP BY p.method ORDER BY amount DESC""", p)
+    by_cashier = rows(f"""SELECT e.name, COUNT(CASE WHEN o.type!='qaytarish' THEN 1 END) n, COALESCE(SUM(o.total),0) revenue
+                          FROM orders o LEFT JOIN employees e ON e.id=o.cashier_id WHERE {w} GROUP BY o.cashier_id ORDER BY revenue DESC""", p)
+    by_type = rows(f"""SELECT o.type, COUNT(*) n, COALESCE(SUM(o.total),0) revenue FROM orders o WHERE {w} GROUP BY o.type""", p)
+    top = rows(f"""SELECT i.name, i.category, SUM(i.qty) qty, SUM(i.price*i.qty) revenue, SUM(i.price*i.qty - i.cost*i.qty) profit
+                   FROM order_items i JOIN orders o ON o.id=i.order_id WHERE {w} GROUP BY i.product_id ORDER BY revenue DESC LIMIT 30""", p)
+    by_cat = rows(f"""SELECT CASE WHEN i.is_bonus=1 THEN 'bonus' ELSE i.category END cat, SUM(i.qty) qty,
+                      SUM(i.price*i.qty) revenue, SUM(i.price*i.qty - i.cost*i.qty) profit
+                      FROM order_items i JOIN orders o ON o.id=i.order_id WHERE {w} GROUP BY cat""", p)
+    res = {"from": frm, "to": to, "head": head, "by_day": by_day, "by_method": by_method, "by_cashier": by_cashier,
+           "by_type": by_type, "top": top, "by_category": by_cat, "can_profit": user["role"] == "admin"}
+    if user["role"] != "admin":           # kassir foydani ko'rmaydi
+        res["head"].pop("profit", None)
+        for lst in (by_day, top, by_cat):
+            for r in lst:
+                r.pop("profit", None)
+    return res
+
+
+def api_report_debts():
+    cust = rows("""SELECT c.id, c.name, c.phone, c.debt, GROUP_CONCAT(cars.plate, ', ') plates,
+                   (SELECT MAX(created_at) FROM debt_tx t WHERE t.customer_id=c.id) last_tx
+                   FROM customers c LEFT JOIN cars ON cars.customer_id=c.id WHERE COALESCE(c.debt,0)!=0
+                   GROUP BY c.id ORDER BY c.debt DESC""")
+    sup = rows("SELECT id, name, phone, debt FROM suppliers WHERE COALESCE(debt,0)!=0 ORDER BY debt DESC")
+    return {"customers": cust, "suppliers": sup,
+            "customer_total": sum(c["debt"] for c in cust if c["debt"] > 0),
+            "supplier_total": sum(s["debt"] for s in sup if s["debt"] > 0)}
 
 
 # ---------------------------------------------------------------- employees/settings
@@ -976,6 +1489,9 @@ def api_bootstrap(user):
         "products": products_full(),
         "car_models": rows("SELECT * FROM car_models ORDER BY sort, name"),
         "group_filters": GROUP_FILTERS,
+        "methods": METHODS,
+        "cash_cats": {"kirim": KIRIM_CATS, "chiqim": CHIQIM_CATS},
+        "shift": (shift_summary(current_shift()) if current_shift() else None) if user["role"] in ("kassir", "admin") else None,
         "me": user_public(user),
         "version": VERSION["v"],
     }
@@ -1132,6 +1648,12 @@ def route(method, path, q, b, user, token):
             CON.execute("UPDATE customers SET name=?, phone=?, note=? WHERE id=?",
                         (b.get("name", ""), norm_phone(b.get("phone")), b.get("note", ""), rid))
             return api_customer(rid)
+        if method == "POST" and not rid:
+            return api_customer_create(b)
+        if method == "POST" and rid and action == "pay":
+            return api_customer_pay(rid, b, user)
+        if method == "POST" and rid and action == "debt":
+            return api_customer_debt_adjust(rid, b, user)
         if method == "POST" and rid and action == "cashback":
             amt = int(float(b.get("amount") or 0))
             CON.execute("UPDATE customers SET cashback=MAX(cashback+?,0) WHERE id=?", (amt, rid))
@@ -1158,8 +1680,37 @@ def route(method, path, q, b, user, token):
             return api_product_save(b)
         if method == "PUT" and rid:
             return api_product_save(b, rid)
-    if head == "purchases" and method == "POST":
-        return api_purchase(b)
+    if head == "purchases":
+        if method == "POST":
+            return api_purchase(b, user)
+        if rid:
+            return api_purchase_get(rid)
+        return api_purchases(q)
+    if head == "suppliers":
+        if method == "GET" and rid:
+            return api_supplier(rid)
+        if method == "GET":
+            return api_suppliers(q)
+        if method == "POST" and rid and action == "pay":
+            return api_supplier_pay(rid, b, user)
+        if method == "POST":
+            return api_supplier_save(b, None, user)
+        if method == "PUT" and rid:
+            return api_supplier_save(b, rid, user)
+    if head == "shift":
+        sub = parts[1] if len(parts) > 1 else ""
+        if method == "POST" and sub == "open":
+            return api_shift_open(b, user)
+        if method == "POST" and sub == "close":
+            return api_shift_close(b, user)
+        sh = current_shift()
+        return shift_summary(sh) if sh else None
+    if head == "shifts":
+        return api_shift(rid) if rid else api_shifts()
+    if head == "cash":
+        if method == "POST":
+            return api_cash_add(b, user)
+        return api_cash(q)
     if head == "stock_moves" and method == "GET":
         return rows("""SELECT m.*, p.name, p.unit FROM stock_moves m JOIN products p ON p.id=m.product_id
                        ORDER BY m.id DESC LIMIT 300""")
@@ -1176,6 +1727,8 @@ def route(method, path, q, b, user, token):
             return api_order_close(rid, b, user)
         if method == "POST" and rid and action == "cancel":
             return api_order_cancel(rid)
+        if method == "POST" and rid and action == "refund":
+            return api_order_refund(rid, b, user)
     if head == "today":
         return api_today()
     if head == "inventories":
@@ -1203,18 +1756,23 @@ def route(method, path, q, b, user, token):
             return api_report_profit(q)
         if sub == "payroll":
             return api_report_payroll(q)
+        if sub == "summary":
+            return api_report_summary(q, user)
+        if sub == "debts":
+            return api_report_debts()
     if head == "salary":
         if method == "POST":
-            return api_salary_pay(b)
+            return api_salary_pay(b, user)
         return rows("""SELECT sp.*, e.name FROM salary_payments sp JOIN employees e ON e.id=sp.employee_id
                        ORDER BY sp.id DESC LIMIT 200""")
     if head == "expenses":
         if method == "POST":
-            CON.execute("INSERT INTO expenses(title,amount,created_at) VALUES(?,?,?)",
-                        (b.get("title") or "", int(float(b.get("amount") or 0)), now()))
-            return {"ok": True}
+            return api_cash_add({"kind": "chiqim", "category": b.get("category") or "Boshqa xarajat",
+                                 "method": b.get("method") or "naqd", "amount": b.get("amount"), "note": b.get("title")}, user)
         frm, to = period_args(q)
-        return rows("SELECT * FROM expenses WHERE date(created_at) BETWEEN ? AND ? ORDER BY id DESC", (frm, to))
+        return rows(f"""SELECT id, COALESCE(NULLIF(note,''), category) AS title, category, amount, created_at FROM cash_tx
+                        WHERE kind='chiqim' AND date(created_at) BETWEEN ? AND ?
+                        AND category IN ({','.join('?' * len(EXPENSE_CATS))}) ORDER BY id DESC""", (frm, to) + EXPENSE_CATS)
     if head == "settings":
         if method == "GET":
             return public_settings()
