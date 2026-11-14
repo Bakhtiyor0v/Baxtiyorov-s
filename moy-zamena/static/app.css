@@ -456,3 +456,21 @@ body.posmode .demo-bar{display:none}
   .pos-cart{order:-1;border-bottom:1px solid var(--line)}
   .cart-lines{max-height:40vh}
 }
+
+/* AI (rasmdan tanib olish) */
+.ai-btn{white-space:nowrap;background:#f3e8ff;color:#6b2fb0}
+.ai-btn:hover{filter:brightness(.97)}
+.ai-pick{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+.ai-res{display:flex;gap:16px;align-items:flex-start}
+.ai-prev{width:220px;max-width:40%;border-radius:12px;border:1px solid var(--line);object-fit:contain;max-height:60vh}
+.ai-wait{display:flex;align-items:center;gap:10px;font-size:18px;color:var(--muted);padding:30px 0}
+.spin{width:22px;height:22px;border:3px solid #d7e3fb;border-top-color:var(--primary);border-radius:50%;animation:rot .8s linear infinite;display:inline-block}
+@keyframes rot{to{transform:rotate(360deg)}}
+.ai-t select{min-height:34px;padding:4px 6px;font-size:14px}
+.ai-t tr.unm{background:#fff8ec}
+.ai-off{text-align:center;padding:10px}
+@media (max-width:700px){.ai-res{flex-direction:column}.ai-prev{max-width:100%;width:100%}}
+
+/* Admin qo'shimchalari */
+tr.tot-row td{border-top:2px solid var(--line);background:#f7f9fc}
+.warn-box.row{display:flex;align-items:center;gap:10px}

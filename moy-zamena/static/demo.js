@@ -63,7 +63,10 @@
     ['Chery Tiggo', 'xitoy'], ['Chery Arrizo', 'xitoy'], ['Haval', 'xitoy'], ['Jetour', 'xitoy'], ['Changan', 'xitoy'], ['Geely', 'xitoy'],
     ['Kia K5', 'boshqa'], ['Hyundai Elantra', 'boshqa']];
   const TABLES = ['employees', 'customers', 'cars', 'products', 'car_models', 'product_models', 'orders', 'items', 'moves', 'payments', 'shifts', 'cash_tx',
-    'debt_tx', 'cashback_tx', 'suppliers', 'supplier_tx', 'purchases', 'purchase_items', 'inventories', 'inventory_items', 'salary_payments'];
+    'debt_tx', 'cashback_tx', 'suppliers', 'supplier_tx', 'purchases', 'purchase_items', 'inventories', 'inventory_items', 'salary_payments',
+    'writeoffs', 'writeoff_items'];
+  const WRITEOFF_REASONS = ['Yaroqsiz / buzilgan', "Muddati o'tgan", "Do'kon ehtiyoji uchun", "Yo'qolgan", 'Boshqa'];
+  const CAT_ALIASES = { moy: 'moy', 'масло': 'moy', oil: 'moy', filtr: 'filtr', filter: 'filtr', 'фильтр': 'filtr', boshqa: 'boshqa', 'другое': 'boshqa', xizmat: 'xizmat', 'услуга': 'xizmat', service: 'xizmat' };
 
   function seed() {
     const d = { v: 1, seq: {}, sessions: {}, settings: { ...DEFAULT_SETTINGS } };
@@ -102,6 +105,7 @@
   let db = null;
   try { db = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { db = null; }
   if (!db || !db.seq || !db.sessions || !db.shifts) db = seed();
+  TABLES.forEach(t => { if (!db[t]) db[t] = []; });     // eski demo bazasiga yangi jadvallar
   const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { } };
   const nid = t => (db.seq[t] = (db.seq[t] || 0) + 1);
   const ins = (t, rowObj) => { const r = { id: nid(t), ...rowObj }; db[t].push(r); return r; };
@@ -119,7 +123,7 @@
   // ------------------------------------------------------------ mahsulotlar
   const productsFull = () => db.products.map(p => {
     const { image, ...rest } = p;
-    return { ...rest, models: db.product_models.filter(m => m.product_id === p.id).map(m => m.model).sort(), image_url: image || '' };
+    return { ...rest, min_stock: p.min_stock || 0, models: db.product_models.filter(m => m.product_id === p.id).map(m => m.model).sort(), image_url: image || '' };
   }).sort((a, b) => (a.category + a.kind + a.name).localeCompare(b.category + b.kind + b.name));
   function moveStock(pid, qty, kind, ref, cost) {
     const p = byId('products', pid); if (!p || p.category === 'xizmat') return;
@@ -530,10 +534,12 @@
       const pay = H.payroll(q);
       const expenses = sumBy(db.cash_tx.filter(x => x.kind === 'chiqim' && inPeriod(x.created_at, f, t) && EXPENSE_CATS.includes(x.category)), x => x.amount);
       const gross = head.revenue - head.cost, by = k => (cg[k] ? Math.round(cg[k].revenue - cg[k].cost) : 0);
+      const writeoff = sumBy(db.writeoffs.filter(w => inPeriod(w.created_at, f, t)), w => w.total_cost);
+      const invDiff = Math.round(sumBy(db.moves.filter(m => m.kind === 'inventar' && inPeriod(m.created_at, f, t)), m => m.qty * m.cost));
       const oil = by('moy'), filt = by('filtr'), bonus = by('bonus');
       return { from: f, to: t, head, categories, products: Object.values(pg).sort((a, b) => b.profit - a.profit), gross_profit: gross, oil_profit: oil, filter_profit: filt, bonus_cost: -bonus,
-        other_profit: gross - oil - filt - bonus, kpi_total: pay.kpi_total, salary_total: pay.salary_total, expenses, cashback_liability: sumBy(db.customers, c => c.cashback),
-        net_profit: gross - pay.kpi_total - pay.salary_total - expenses };
+        other_profit: gross - oil - filt - bonus, kpi_total: pay.kpi_total, salary_total: pay.salary_total, expenses, writeoff_loss: writeoff, inventory_diff: invDiff,
+        cashback_liability: sumBy(db.customers, c => c.cashback), net_profit: gross - pay.kpi_total - pay.salary_total - expenses - writeoff + invDiff };
     },
     payroll(q) {
       const [f, t] = period(q), d1 = new Date(f), d2 = new Date(t);
@@ -552,6 +558,110 @@
       });
       return { from: f, to: t, rows: rowsOut, kpi_total: kpiT, salary_total: salT };
     },
+    // ---------------- admin (Bito uslubida): hisobdan chiqarish, ombor/mijoz/oylik hisobotlari, import
+    writeoffCreate(b, user) {
+      const reason = b.reason || ''; if (!WRITEOFF_REASONS.includes(reason)) fail('Hisobdan chiqarish sababini tanlang');
+      const items = (b.items || []).map(it => {
+        const p = byId('products', it.product_id), qty = Math.round((+it.qty || 0) * 1000) / 1000;
+        if (!p || p.category === 'xizmat' || qty <= 0) fail("Mahsulot yoki miqdor noto'g'ri");
+        if (qty > (p.stock || 0) + 1e-9) fail(`${p.name}: omborda ${p.stock} ${p.unit} bor, ${qty} chiqarib bo'lmaydi`);
+        return [p, qty];
+      });
+      if (!items.length) fail("Mahsulot qo'shing");
+      const w = ins('writeoffs', { reason, note: String(b.note || '').trim().slice(0, 300), total_cost: Math.round(sumBy(items, ([p, q]) => p.cost * q)), employee_id: user.id, created_at: now() });
+      items.forEach(([p, q]) => { ins('writeoff_items', { writeoff_id: w.id, product_id: p.id, name: p.name, qty: q, cost: p.cost }); moveStock(p.id, -q, 'hisobdan', `hisobdan chiqarish #${w.id}: ${reason}`, p.cost); });
+      return H.writeoffGet(w.id);
+    },
+    writeoffGet(id) {
+      const w = byId('writeoffs', id); if (!w) fail('Topilmadi', 404);
+      return { ...w, employee_name: emp(w.employee_id)?.name || null, items: db.writeoff_items.filter(i => i.writeoff_id === w.id).map(i => ({ ...i, unit: byId('products', i.product_id)?.unit })) };
+    },
+    writeoffs(q) {
+      const [f, t] = period(q), ws = db.writeoffs.filter(w => inPeriod(w.created_at, f, t));
+      const rowsOut = [...ws].reverse().map(w => { const its = db.writeoff_items.filter(i => i.writeoff_id === w.id); return { ...w, employee_name: emp(w.employee_id)?.name || null, n: its.length, names: its.map(i => i.name).join(', ') }; });
+      const g = {}; ws.forEach(w => { g[w.reason] = g[w.reason] || { reason: w.reason, n: 0, total: 0 }; g[w.reason].n++; g[w.reason].total += w.total_cost; });
+      const by_reason = Object.values(g).sort((a, b) => b.total - a.total);
+      return { from: f, to: t, rows: rowsOut, by_reason, total: sumBy(by_reason, x => x.total) };
+    },
+    reportStock(q) {
+      const [f, t] = period(q), sold = {}, last = {};
+      db.orders.filter(o => o.status === 'yopilgan').forEach(o => db.items.filter(i => i.order_id === o.id).forEach(i => {
+        if (inPeriod(o.closed_at, f, t)) sold[i.product_id] = (sold[i.product_id] || 0) + i.qty;
+        if (o.type !== 'qaytarish' && (!last[i.product_id] || o.closed_at > last[i.product_id])) last[i.product_id] = o.closed_at;
+      }));
+      const cats = {}, low = [], unsold = [], totals = { items: 0, cost_value: 0, retail_value: 0 };
+      db.products.filter(p => p.active && p.category !== 'xizmat').sort((a, b) => (a.category + a.name).localeCompare(b.category + b.name)).forEach(p0 => {
+        const st = Math.max(p0.stock || 0, 0);
+        const p = { id: p0.id, name: p0.name, category: p0.category, kind: p0.kind, unit: p0.unit, cost: p0.cost, price: p0.price, stock: p0.stock, min_stock: p0.min_stock || 0,
+          sold: Math.round((sold[p0.id] || 0) * 100) / 100, last_sale: last[p0.id] || null, cost_value: Math.round(st * (p0.cost || 0)), retail_value: Math.round(st * (p0.price || 0)) };
+        const c = cats[p.category] = cats[p.category] || { cat: p.category, items: 0, qty: 0, cost_value: 0, retail_value: 0 };
+        c.items++; c.qty += st; c.cost_value += p.cost_value; c.retail_value += p.retail_value;
+        totals.items++; totals.cost_value += p.cost_value; totals.retail_value += p.retail_value;
+        if ((p.stock || 0) <= 0 || (p.min_stock && p.stock <= p.min_stock)) low.push(p);
+        if (st > 0 && p.sold <= 0) unsold.push(p);
+      });
+      low.sort((a, b) => ((a.stock > 0) - (b.stock > 0)) || ((a.stock - a.min_stock) - (b.stock - b.min_stock)));
+      unsold.sort((a, b) => b.cost_value - a.cost_value);
+      totals.low_count = low.length; totals.unsold_value = sumBy(unsold, x => x.cost_value);
+      return { from: f, to: t, totals, by_category: Object.values(cats), low, unsold };
+    },
+    reportCustomers(q) {
+      const [f, t] = period(q), os = H.closedIn(f, t), g = {};
+      os.filter(o => o.customer_id).forEach(o => {
+        const c = byId('customers', o.customer_id);
+        const r = g[c.id] = g[c.id] || { id: c.id, name: c.name, phone: c.phone, cashback: c.cashback, debt: c.debt || 0, n: 0, revenue: 0, profit: 0, last_visit: null,
+          plates: db.cars.filter(x => x.customer_id === c.id).map(x => x.plate).join(', ') || null };
+        if (o.type !== 'qaytarish') r.n++; r.revenue += o.total; r.profit += o.total - o.cost; if (!r.last_visit || o.closed_at > r.last_visit) r.last_visit = o.closed_at;
+      });
+      const head = { customers: new Set(os.filter(o => o.customer_id).map(o => o.customer_id)).size, anon_revenue: sumBy(os.filter(o => !o.customer_id), o => o.total), revenue: sumBy(os, o => o.total),
+        new: db.customers.filter(c => inPeriod(c.created_at, f, t)).length };
+      const lastZ = {};
+      db.orders.filter(o => o.status === 'yopilgan' && o.type === 'zamena' && o.car_id).forEach(o => { const r = lastZ[o.car_id] = lastZ[o.car_id] || { last: '', visits: 0 }; r.visits++; if (o.closed_at > r.last) r.last = o.closed_at; });
+      const due = Object.entries(lastZ).map(([cid, r]) => {
+        const car = byId('cars', cid), c = car && byId('customers', car.customer_id);
+        const days = Math.floor((Date.now() - new Date(r.last.replace(' ', 'T')).getTime()) / 864e5);
+        return { car_id: +cid, plate: car?.plate, model: car?.model, last_mileage: car?.last_mileage, customer_id: c?.id || null, name: c?.name || null, phone: c?.phone || null, last_change: r.last, days, visits: r.visits };
+      }).filter(x => x.days >= 75 && x.days <= 400).sort((a, b) => b.days - a.days).slice(0, 200);
+      return { from: f, to: t, head, top: Object.values(g).sort((a, b) => b.revenue - a.revenue).slice(0, 100), due };
+    },
+    reportMonthly(q) {
+      const year = +(q.get('year') || new Date().getFullYear()); if (!year) fail("Yil noto'g'ri");
+      const d = new Date(), lastM = year === d.getFullYear() ? d.getMonth() + 1 : 12, months = [];
+      for (let m = 1; m <= lastM; m++) {
+        const f = `${year}-${pad(m)}-01`, t = `${year}-${pad(m)}-${pad(new Date(year, m, 0).getDate())}`;
+        const r = H.profit(new URLSearchParams({ from: f, to: t }));
+        months.push({ month: f.slice(0, 7), revenue: r.head.revenue, cost: r.head.cost, orders: r.head.orders, gross: r.gross_profit, kpi: r.kpi_total, salary: r.salary_total,
+          expenses: r.expenses, writeoff: r.writeoff_loss, inventory: r.inventory_diff, net: r.net_profit });
+      }
+      const total = {}; ['revenue', 'cost', 'orders', 'gross', 'kpi', 'salary', 'expenses', 'writeoff', 'inventory', 'net'].forEach(k => { total[k] = sumBy(months, x => x[k]); });
+      return { year, months, total };
+    },
+    productImport(b) {
+      const data = b.rows; if (!Array.isArray(data) || !data.length) fail("Fayl bo'sh");
+      if (data.length > 3000) fail("Bir martada 3000 tadan ko'p qator yuklab bo'lmaydi");
+      const numIn = (v, what) => { const s = String(v ?? '').replace(/[\s ']/g, '').replace(',', '.'); if (s === '') return null; const n = Number(s); if (Number.isNaN(n)) fail(`${what}: «${v}» son emas`); return n; };
+      let created = 0, updated = 0; const errors = [];
+      data.forEach((r, i) => {
+        try {
+          const name = String(r.name || '').trim(); if (!name) fail("nomi yo'q");
+          const bc = String(r.barcode || '').trim();
+          const ex = (bc && db.products.find(p => p.barcode === bc)) || db.products.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
+          const catRaw = String(r.category || '').trim().toLowerCase(), cat = CAT_ALIASES[catRaw];
+          if (catRaw && !cat) fail(`kategoriya «${r.category}» noma'lum (moy / filtr / boshqa / xizmat)`);
+          const cost = numIn(r.cost, 'Tannarx'), price = numIn(r.price, 'Narx'), mins = numIn(r.min_stock, 'Min. qoldiq'), stock = numIn(r.stock, 'Qoldiq');
+          if (ex) {
+            H.productSave({ name, category: cat || ex.category, unit: String(r.unit || '').trim() || ex.unit, cost: cost ?? ex.cost, price: price ?? ex.price, barcode: bc || ex.barcode, active: ex.active,
+              kind: String(r.kind || '').trim() || ex.kind, grade: String(r.grade || '').trim() || ex.grade, bonus_kinds: ex.bonus_kinds || [], min_stock: mins ?? (ex.min_stock || 0) }, ex.id);
+            updated++;
+          } else {
+            H.productSave({ name, category: cat || 'boshqa', unit: String(r.unit || '').trim() || 'dona', cost: cost || 0, price: price || 0, barcode: bc, kind: String(r.kind || '').trim(),
+              grade: String(r.grade || '').trim(), min_stock: mins || 0, stock: stock || 0 });
+            created++;
+          }
+        } catch (e) { if (e.code && e.code !== 400) throw e; errors.push(`${i + 1}-qator: ${e.message}`); }
+      });
+      return { created, updated, errors: errors.slice(0, 50), error_count: errors.length };
+    },
     // ---------------- ombor / xodim / sozlama
     productSave(b, id) {
       const name = String(b.name || '').trim(); if (!name) fail('Nomi kerak');
@@ -559,6 +669,7 @@
       if (!p) p = ins('products', { stock: 0, image: '' });
       Object.assign(p, { name, category: b.category || 'boshqa', unit: b.unit || 'dona', cost: +b.cost || 0, price: Math.trunc(+b.price || 0), barcode: String(b.barcode || ''),
         active: b.active === undefined ? 1 : (b.active ? 1 : 0), kind: String(b.kind || ''), grade: normGrade(b.grade), bonus_kinds: (b.bonus_kinds || []).filter(k => FILTER_KINDS.includes(k)) });
+      if (b.min_stock !== undefined && b.min_stock !== '' && b.min_stock !== null) p.min_stock = Math.max(+b.min_stock || 0, 0); else if (p.min_stock === undefined) p.min_stock = 0;
       if (!id && +b.stock) moveStock(p.id, +b.stock, 'prixod', "boshlang'ich", +b.cost || 0);
       if ('models' in b) { db.product_models = db.product_models.filter(m => m.product_id !== p.id); (b.models || []).forEach(model => db.product_models.push({ product_id: p.id, model })); }
       if ('image' in b) { const img = b.image || ''; if (img && (!/^data:image\/(jpeg|png|webp);base64,/.test(img) || img.length > 2e6)) fail("Rasm JPG/PNG bo'lishi kerak"); p.image = img; }
@@ -585,14 +696,15 @@
 
   // ------------------------------------------------------------ huquqlar (server.py check_access bilan bir xil)
   const SELLER = new Set(['bootstrap', 'version', 'me', 'logout', 'cars', 'today', 'orders']);
-  const KASSA = new Set([...SELLER, 'customers', 'products', 'purchases', 'stock_moves', 'inventories', 'car_models', 'shift', 'shifts', 'cash', 'suppliers', 'reports']);
+  const KASSA = new Set([...SELLER, 'customers', 'products', 'purchases', 'stock_moves', 'inventories', 'car_models', 'shift', 'shifts', 'cash', 'suppliers', 'reports', 'ai']);
   function access(user, method, parts) {
     const head = parts[0], rid = /^\d+$/.test(parts[1] || '') ? +parts[1] : null, action = parts[2];
     const deny = () => fail("Bu amal uchun huquq yo'q", 403);
     if (user.role === 'admin') return;
     if (user.role === 'kassir') {
       if (!KASSA.has(head) || (head === 'car_models' && method !== 'GET')) deny();
-      if (head === 'reports' && !['summary', 'debts'].includes(parts[1])) deny();
+      if (head === 'reports' && !['summary', 'debts', 'stock'].includes(parts[1])) deny();
+      if (head === 'products' && parts[1] === 'import') deny();
       return;
     }
     if (user.role !== 'sotuvchi' || !(SELLER.has(head) || (head === 'products' && method === 'GET'))) deny();
@@ -613,7 +725,7 @@
         const sh = currentShift();
         return { settings: { ...db.settings }, employees: db.employees.map(e => ({ id: e.id, name: e.name, role: e.role, active: e.active })), products: productsFull(),
           car_models: [...db.car_models].sort((a, c) => a.sort - c.sort || a.name.localeCompare(c.name)), group_filters: GROUP_FILTERS, methods: METHODS,
-          cash_cats: { kirim: KIRIM_CATS, chiqim: CHIQIM_CATS }, shift: ['kassir', 'admin'].includes(user.role) && sh ? shiftSummary(sh) : null, me: pub(user), version: db.v };
+          cash_cats: { kirim: KIRIM_CATS, chiqim: CHIQIM_CATS }, writeoff_reasons: WRITEOFF_REASONS, shift: ['kassir', 'admin'].includes(user.role) && sh ? shiftSummary(sh) : null, me: pub(user), version: db.v };
       }
       case 'cars':
         if (sub === 'lookup') { const plate = normPlate(q.get('plate')); if (!plate) fail('Raqam kiriting'); const c = db.cars.find(x => x.plate === plate); return { plate, valid: PLATE_OK.test(plate), car: c ? carFull(c.id) : null }; }
@@ -637,6 +749,7 @@
       case 'products':
         if (method === 'GET') return productsFull();
         if (method === 'POST' && rid && action === 'models') { const model = String(b.model || '').trim(); if (!model) fail("Model noto'g'ri"); if (!db.product_models.some(m => m.product_id === rid && m.model === model)) db.product_models.push({ product_id: rid, model }); return productsFull().find(x => x.id === rid); }
+        if (method === 'POST' && parts[1] === 'import') return H.productImport(b);
         if (method === 'POST') return H.productSave(b);
         if (method === 'PUT' && rid) return H.productSave(b, rid);
         break;
@@ -667,6 +780,10 @@
         if (action === 'refund') return H.orderRefund(rid, b, user);
         break;
       case 'today': return H.today();
+      case 'ai':   // Claude API kaliti faqat haqiqiy serverda saqlanadi — demo'da o'chiq
+        if (sub === 'status') return { configured: false, demo: true, has_key: false, sdk: false, model: 'claude-opus-5-5' };
+        fail("Rasmdan tanib olish do'kon serverida ishlaydi (Claude API kaliti serverda saqlanadi).", 409);
+        break;
       case 'inventories':
         if (method === 'GET' && rid) return H.inventory(rid);
         if (method === 'GET') return [...db.inventories].reverse().map(i => ({ ...i, n: db.inventory_items.filter(x => x.inventory_id === i.id).length }));
@@ -689,6 +806,13 @@
         if (sub === 'payroll') return H.payroll(q);
         if (sub === 'summary') return H.summary(q, user);
         if (sub === 'debts') return H.debts();
+        if (sub === 'stock') return H.reportStock(q);
+        if (sub === 'customers') return H.reportCustomers(q);
+        if (sub === 'monthly') return H.reportMonthly(q);
+        break;
+      case 'writeoffs':
+        if (method === 'POST' && !rid) return H.writeoffCreate(b, user);
+        if (method === 'GET') return rid ? H.writeoffGet(rid) : H.writeoffs(q);
         break;
       case 'salary':
         if (method === 'POST') {

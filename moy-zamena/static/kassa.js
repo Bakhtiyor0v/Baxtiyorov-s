@@ -26,6 +26,9 @@ const ICONS = {
   x: 'M18 6L6 18M6 6l12 12',
   print: 'M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z',
   undo: 'M3 7v6h6M3 13a9 9 0 1 0 3-7l-3 3',
+  trash: 'M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6',
+  download: 'M12 3v12M7 10l5 5 5-5M4 21h16',
+  upload: 'M12 15V3M7 8l5-5 5 5M4 21h16',
 };
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICONS[n] || ''}"/></svg>`;
 const MNAME = m => (S.boot.methods || {})[m] || m;
@@ -53,6 +56,7 @@ const KNAV = [
   ['taminot', 'Yetkazib beruvchilar', 'truck', 'kassir', "Ta'minot"],
   ['mahsulot', 'Ombor', 'box', 'kassir', "Ta'minot"],
   ['inventar', 'Inventarizatsiya', 'check', 'kassir', "Ta'minot"],
+  ['hisobdan', 'Hisobdan chiqarish', 'trash', 'admin', "Ta'minot"],
   ['kassa', 'Kassa', 'wallet', 'kassir', 'Moliya'],
   ['hisobot', 'Hisobotlar', 'chart', 'kassir', 'Moliya'],
   ['oylik', 'Oylik / KPI', 'medal', 'admin', 'Boshqaruv'],
@@ -60,7 +64,7 @@ const KNAV = [
   ['sozlama', 'Sozlamalar', 'gear', 'admin', 'Boshqaruv'],
 ];
 TABS.kassa = [['pos', 'POS', 'kassir'], ...KNAV.map(([k, n, , r]) => [k, n, r])];
-Object.assign(PARENT, { xarid_new: 'xarid' });
+Object.assign(PARENT, { xarid_new: 'xarid', hisobdan_new: 'hisobdan' });
 
 function buildSide() {
   let side = $('#side');
@@ -157,12 +161,13 @@ VIEWS.bosh = async () => {
   const d = today();
   const [r, t, debts, sh] = await Promise.all([GET(`reports/summary?from=${d}&to=${d}`), GET('today'), GET('reports/debts'), GET('shift')]);
   S.boot.shift = sh; sideShift();
-  const h = r.head;
+  const h = r.head, lowN = S.boot.products.filter(isLow).length;
   const tile = (label, v, sub = '', cls = '') => `<div class="card stat"><div class="label">${label}</div><div class="big ${cls}">${v}</div>${sub ? `<div class="small muted">${sub}</div>` : ''}</div>`;
   $('#app').innerHTML = `<div class="kpage">
     <div class="row khead"><h2 class="sp">Bugun, ${dateOf(d)}</h2><button class="btn p lg" id="pos" type="button">${ic('pos')} POS — sotuvga kirish</button></div>
     <div class="grid g4">${tile('Tushum', fmt(h.revenue), `${h.receipts} ta chek`)}${tile("O'rtacha chek", fmt(h.avg_check))}
       ${tile('Jarayondagi zamena', t.open.length + ' ta', `bugun jami ${t.count} ta mashina`)}${'profit' in h ? tile('Yalpi foyda', fmt(h.profit), 'tushum − tannarx', h.profit < 0 ? 'neg' : 'pos') : tile('Qaytarishlar', fmt(h.refunds), `${h.refund_count} ta`)}</div>
+    ${lowN ? `<div class="warn-box row" style="margin-bottom:14px"><span class="sp">⚠ <b>${lowN} ta</b> mahsulot kam qolgan yoki tugagan</span><button class="btn sm" id="lowGo" type="button">Ko'rish</button></div>` : ''}
     <div class="grid g2">
       <div class="card"><div class="row"><h3 class="sp">Smena</h3>${sh ? `<button class="btn" id="cls" type="button">Smenani yopish</button>` : `<button class="btn p" id="opn" type="button">Smenani ochish</button>`}</div>
         ${sh ? `<p class="muted">#${sh.id} · ${esc(sh.employee_name || '')} · ${timeOf(sh.opened_at)} dan · kassada naqd <b>${sum(sh.expected_cash)}</b></p>${shiftTable(sh)}` : '<div class="empty">Smena yopiq. Sotuv qilish uchun smenani oching.</div>'}</div>
@@ -175,6 +180,7 @@ VIEWS.bosh = async () => {
   $('#pos').onclick = () => go('pos');
   if (sh) $('#cls').onclick = () => closeShiftModal(sh); else $('#opn').onclick = () => openShiftModal();
   $$('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
+  if ($('#lowGo')) $('#lowGo').onclick = () => go('mahsulot', { cat: 'low' });
 };
 
 // ================================================================== POS
@@ -220,7 +226,7 @@ function posDraw() {
 // ---- Sotuv: mahsulotlar
 function posProducts() {
   const P = S.pos, L = $('#posL');
-  L.innerHTML = `<div class="pos-search"><div class="sbox">${ic('search')}<input id="pq" placeholder="Nomi yoki shtrix-kod (F2)" value="${esc(P.q)}" autocomplete="off"></div>
+  L.innerHTML = `<div class="pos-search"><div class="row" style="flex-wrap:nowrap"><div class="sbox sp">${ic('search')}<input id="pq" placeholder="Nomi yoki shtrix-kod (F2)" value="${esc(P.q)}" autocomplete="off"></div><button class="btn ai-btn" id="aiBtn" type="button">📷 Rasmdan</button></div>
     <div class="chips" id="pcat">${[['', 'Hammasi'], ...Object.entries(CATS)].map(([k, v]) => `<button class="chip ${k === P.cat ? 'on' : ''}" data-c="${k}" type="button">${v}</button>`).join('')}</div></div>
     <div class="pgrid" id="pgrid"></div>`;
   const grid = () => {
@@ -240,6 +246,16 @@ function posProducts() {
   };
   $('#pcat').onclick = e => { const b = e.target.closest('[data-c]'); if (!b) return; P.cat = b.dataset.c; $$('#pcat .chip').forEach(x => x.classList.toggle('on', x === b)); grid(); };
   $('#pgrid').onclick = e => { const b = e.target.closest('[data-id]'); if (b) posAdd(prod(b.dataset.id)); };
+  $('#aiBtn').onclick = () => aiModal('sotuv', (lines, r) => {
+    const P = S.pos, s = P.mode === 'sotuv' ? P.sale : P.zsale;
+    if (!s) return toast('Avval chapdan mashinani tanlang', true);
+    lines.forEach(({ product: p, qty, price }) => {
+      const ex = s.items.find(i => i.product_id === p.id && !i.is_bonus && +i.price === price);
+      if (ex) ex.qty = Math.round((+ex.qty + qty) * 100) / 100; else s.items.push({ product_id: p.id, name: p.name, category: p.category, qty, price, is_bonus: false });
+    });
+    s.dirty = true; if (P.mode === 'sotuv') saveSale(); posCart();
+    toast(`${lines.length} ta mahsulot savatga qo'shildi` + (r.party_name && !s.customer ? ` · mijoz: ${r.party_name} (F3 bilan tanlang)` : ''));
+  });
   grid();
 }
 function posAdd(p) {
@@ -670,7 +686,7 @@ VIEWS.xarid_new = async () => {
     <div class="grid g2" style="grid-template-columns:2fr 1fr;align-items:start">
       <div class="card"><div class="row" style="margin-bottom:10px"><label class="f sp" style="margin:0"><span>Yetkazib beruvchi</span><select id="sp"><option value="">— tanlang —</option>${sups.map(s => `<option value="${s.id}" ${+f.supplier_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
           <button class="btn" id="nsp" type="button" style="align-self:flex-end">${ic('plus', 'sm')} Yangi</button></div>
-        <div class="row" style="margin-bottom:10px"><div class="sbox sp">${ic('search')}<input id="bc" placeholder="Shtrix-kod yoki nom — Enter"></div><button class="btn p" id="addp" type="button">${ic('plus', 'sm')} Mahsulot</button></div>
+        <div class="row" style="margin-bottom:10px"><div class="sbox sp">${ic('search')}<input id="bc" placeholder="Shtrix-kod yoki nom — Enter"></div><button class="btn p" id="addp" type="button">${ic('plus', 'sm')} Mahsulot</button><button class="btn ai-btn" id="aiX" type="button">📷 Nakladnoydan</button></div>
         <div class="tbl-wrap"><table><thead><tr><th>Mahsulot</th><th style="width:90px">Miqdor</th><th style="width:130px">Kelish narxi</th><th style="width:130px">Sotuv narxi</th><th class="num">Summa</th><th></th></tr></thead><tbody id="pl"></tbody></table></div></div>
       <div class="card"><h3>Hisob</h3><div class="kv"><span>Mahsulotlar</span><b id="gs">0</b></div>
         <div class="kv"><span>Chegirma</span>${moneyIn('pd', f.discount)}</div><div class="kv tot"><span>Jami</span><b id="gt">0</b></div>
@@ -700,6 +716,16 @@ VIEWS.xarid_new = async () => {
   $('#pl').onclick = e => { if (e.target.closest('[data-del]')) { f.lines.splice(e.target.closest('tr').dataset.i, 1); draw(); } };
   $('#app').oninput = e => { if (['pd', 'pp_naqd', 'pp_terminal', 'pp_otkazma'].includes(e.target.id)) totals(); };
   $('#addp').onclick = () => pickProduct(add);
+  $('#aiX').onclick = () => aiModal('xarid', (lines, r) => {
+    lines.forEach(({ product: p, qty, price }) => {
+      const ex = f.lines.find(l => l.product_id === p.id && +l.cost === (price || p.cost));
+      if (ex) ex.qty = +ex.qty + qty; else f.lines.push({ product_id: p.id, name: p.name, qty, cost: price || p.cost, price: p.price });
+    });
+    const nm = (r.party_name || '').toLowerCase().trim();
+    const sp = nm && sups.find(s => s.name.toLowerCase().includes(nm) || nm.includes(s.name.toLowerCase()));
+    if (sp && !f.supplier_id) { f.supplier_id = sp.id; $('#sp').value = sp.id; }
+    draw(); toast(`${lines.length} ta mahsulot qo'shildi` + (r.party_name && !sp ? ` · yetkazib beruvchi: ${r.party_name} (ro'yxatda yo'q)` : ''));
+  });
   $('#bc').onkeydown = e => { if (e.key !== 'Enter') return; const q = e.target.value.trim(); if (!q) return; const p = S.boot.products.find(x => x.barcode && x.barcode === q) || (S.boot.products.filter(x => x.name.toLowerCase().includes(q.toLowerCase())).length === 1 ? S.boot.products.find(x => x.name.toLowerCase().includes(q.toLowerCase())) : null); if (p) { add(p); e.target.value = ''; } else pickProduct(x => { add(x); e.target.value = ''; }); };
   $('#sp').onchange = e => { f.supplier_id = e.target.value; };
   $('#nsp').onclick = () => supplierForm(null, sp => { f.supplier_id = sp.id; render(); });
@@ -794,12 +820,17 @@ window.addEventListener('resize', () => { clearTimeout(chartTimer); chartTimer =
 const hbars = (rows, label, value) => { const max = Math.max(1, ...rows.map(value)); return rows.map(r => `<div class="hb"><span class="hbl">${label(r)}</span><span class="hbt"><i style="width:${Math.max(0, value(r)) / max * 100}%"></i></span><b class="num">${fmt(value(r))}</b></div>`).join('') || '<div class="muted">yo\'q</div>'; };
 
 VIEWS.hisobot = async () => {
-  const tabs = [['umumiy', 'Umumiy'], ['mahsulot', 'Mahsulotlar'], ['qarz', 'Qarzlar'], ...(isAdmin() ? [['foyda', 'Foyda']] : [])];
-  const tab = S.ctx.rt || (S.ctx.rt = 'umumiy');
+  const tabs = [['umumiy', 'Umumiy'], ['mahsulot', 'Mahsulotlar'], ['ombor', 'Ombor'], ['qarz', 'Qarzlar'],
+    ...(isAdmin() ? [['mijozlar', 'Mijozlar'], ['oylar', 'Oylar (P&L)'], ['foyda', 'Foyda']] : [])];
+  if (!tabs.some(t => t[0] === S.ctx.rt)) S.ctx.rt = 'umumiy';
+  const tab = S.ctx.rt, noPeriod = tab === 'qarz' || tab === 'oylar';
   const pb = periodBar('repP', 'month');
-  const head = `<div class="kpage"><div class="row khead"><h2 class="sp">Hisobotlar</h2><div class="chips" id="rt">${tabs.map(([k, v]) => `<button class="chip ${tab === k ? 'on' : ''}" data-r="${k}" type="button">${v}</button>`).join('')}</div></div>${tab === 'qarz' ? '' : pb.html}`;
-  const bindTop = () => { if (tab !== 'qarz') pb.bind(); $('#rt').onclick = e => { const b = e.target.closest('[data-r]'); if (b) { S.ctx.rt = b.dataset.r; render(); } }; };
+  const head = `<div class="kpage"><div class="row khead"><h2 class="sp">Hisobotlar</h2><div class="chips" id="rt">${tabs.map(([k, v]) => `<button class="chip ${tab === k ? 'on' : ''}" data-r="${k}" type="button">${v}</button>`).join('')}</div></div>${noPeriod ? '' : pb.html}`;
+  const bindTop = () => { if (!noPeriod) pb.bind(); $('#rt').onclick = e => { const b = e.target.closest('[data-r]'); if (b) { S.ctx.rt = b.dataset.r; render(); } }; };
   if (tab === 'foyda') { await profitView(head, pb); bindTop(); return; }
+  if (tab === 'ombor') { await stockReport(head, pb); bindTop(); return; }
+  if (tab === 'mijozlar') { await customersReport(head, pb); bindTop(); return; }
+  if (tab === 'oylar') { await monthlyReport(head); bindTop(); return; }
   if (tab === 'qarz') {
     const d = await GET('reports/debts');
     $('#app').innerHTML = head + `<div class="grid g2" style="align-items:start">
@@ -863,18 +894,23 @@ function periodBar(id, def = 'month') {
 VIEWS.mahsulot = async () => {
   const ps = S.boot.products;
   const f = S.ctx.cat || '';
-  const val = ps.filter(p => p.category !== 'xizmat').reduce((a, p) => a + Math.max(p.stock, 0) * p.cost, 0);
-  $('#app').innerHTML = `<div class="row"><h2 class="sp">Ombor · qoldiq tannarxi ${sum(val)}</h2>
-    <button class="btn" id="moves">Harakatlar</button><button class="btn" id="pur">+ Xarid (kirim)</button><button class="btn p" id="new">+ Yangi mahsulot</button></div>
-    <div class="card"><div class="row" style="margin-bottom:10px"><div class="chips">${[['', 'Hammasi'], ...Object.entries(CATS)].map(([k, v]) => `<span class="chip ${k === f ? 'on' : ''}" data-c="${k}">${v}</span>`).join('')}</div>
+  const goods = ps.filter(p => p.active && p.category !== 'xizmat');
+  const val = goods.reduce((a, p) => a + Math.max(p.stock, 0) * p.cost, 0), retail = goods.reduce((a, p) => a + Math.max(p.stock, 0) * p.price, 0);
+  const lowN = goods.filter(isLow).length, outN = goods.filter(p => p.stock <= 0).length;
+  $('#app').innerHTML = `<div class="kpage"><div class="row khead"><h2 class="sp">Ombor</h2>
+    <button class="btn" id="moves" type="button">Harakatlar</button>${isAdmin() ? `<button class="btn" id="exp" type="button">${ic('download', 'sm')} Excel</button><button class="btn" id="imp" type="button">${ic('upload', 'sm')} Import</button><button class="btn" id="wo" type="button">${ic('trash', 'sm')} Hisobdan chiqarish</button>` : ''}
+    <button class="btn" id="pur" type="button">+ Xarid (kirim)</button><button class="btn p" id="new" type="button">+ Yangi mahsulot</button></div>
+    <div class="grid g4">${ktile('Qoldiq (tannarx)', fmt(val), `${goods.length} xil mahsulot`)}${ktile('Qoldiq (sotuv narxida)', fmt(retail), `ustama ${fmt(retail - val)}`)}
+      ${ktile('Kam qolgan', lowN + ' ta', 'minimal qoldiqqa yetgan', lowN ? 'neg' : '')}${ktile('Tugagan', outN + ' ta', '', outN ? 'neg' : '')}</div>
+    <div class="card"><div class="row" style="margin-bottom:10px"><div class="chips">${[['', 'Hammasi'], ...Object.entries(CATS), ['low', `⚠ Kam qolgan (${lowN})`]].map(([k, v]) => `<span class="chip ${k === f ? 'on' : ''}" data-c="${k}">${v}</span>`).join('')}</div>
       <span class="sp"></span><input id="q" placeholder="Qidirish" style="max-width:260px" value="${esc(S.ctx.q || '')}"></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Nomi</th><th>Kategoriya</th><th class="num">Qoldiq</th><th class="num">Tannarx</th><th class="num">Narx</th><th class="num">Ustama</th><th></th></tr></thead><tbody id="tb"></tbody></table></div></div>`;
+    <div class="tbl-wrap"><table><thead><tr><th>Nomi</th><th>Kategoriya</th><th class="num">Qoldiq</th><th class="num">Tannarx</th><th class="num">Narx</th><th class="num">Ustama</th><th></th></tr></thead><tbody id="tb"></tbody></table></div></div></div>`;
   const draw = () => {
     const q = $('#q').value.toLowerCase();
-    $('#tb').innerHTML = ps.filter(p => (!f || p.category === f) && (!q || p.name.toLowerCase().includes(q))).map(p => {
+    $('#tb').innerHTML = ps.filter(p => (f === 'low' ? isLow(p) : !f || p.category === f) && (!q || p.name.toLowerCase().includes(q) || (p.barcode || '') === q)).map(p => {
       const mg = p.price - p.cost;
       return `<tr class="click" data-id="${p.id}" style="${p.active ? '' : 'opacity:.5'}"><td><div class="row" style="flex-wrap:nowrap">${p.category === 'moy' ? oilImg(p, 'sm') : ''}<div>${esc(p.name)}${p.grade ? ` <span class="tag moy">${esc(p.grade)}</span>` : ''}${(p.bonus_kinds || []).length ? ' <span class="tag bonus">🎁 bonus filtr</span>' : ''}${p.barcode ? `<div class="muted small">${esc(p.barcode)}</div>` : ''}${p.models?.length ? `<div class="muted small">Mos: ${esc(p.models.join(', '))}</div>` : ''}</div></div></td>
-      <td><span class="tag ${p.category}">${CATS[p.category]}</span></td><td class="num ${p.stock <= 0 && p.category !== 'xizmat' ? 'neg' : ''}">${p.category === 'xizmat' ? '—' : qtyFmt(p.stock) + ' ' + esc(p.unit)}</td>
+      <td><span class="tag ${p.category}">${CATS[p.category]}</span></td><td class="num ${isLow(p) ? 'neg' : ''}">${p.category === 'xizmat' ? '—' : qtyFmt(p.stock) + ' ' + esc(p.unit)}${p.min_stock > 0 && p.category !== 'xizmat' ? `<div class="small muted">min ${qtyFmt(p.min_stock)}</div>` : ''}</td>
       <td class="num">${fmt(p.cost)}</td><td class="num"><b>${fmt(p.price)}</b></td><td class="num ${mg < 0 ? 'neg' : 'pos'}">${fmt(mg)}</td><td class="num">›</td></tr>`;
     }).join('');
   };
@@ -884,6 +920,7 @@ VIEWS.mahsulot = async () => {
   $('#tb').onclick = e => { const tr = e.target.closest('tr'); if (tr) productForm(prod(tr.dataset.id)); };
   $('#new').onclick = () => productForm(null);
   $('#pur').onclick = () => go('xarid_new');
+  if ($('#exp')) { $('#exp').onclick = exportProducts; $('#imp').onclick = importModal; $('#wo').onclick = () => go('hisobdan_new'); }
   $('#moves').onclick = safe(async () => {
     const mv = await GET('stock_moves');
     modal('Ombor harakatlari', `<div class="tbl-wrap"><table><thead><tr><th>Sana</th><th>Mahsulot</th><th>Turi</th><th class="num">Miqdor</th><th>Asos</th></tr></thead><tbody>
@@ -928,6 +965,7 @@ function productForm(p) {
         <label class="f"><span>Tannarx (kelish narxi)</span><input id="co" type="number" value="${p?.cost ?? ''}"></label>
         <label class="f"><span>Sotuv narxi${p?.unit === 'litr' ? ' (1 litr)' : ''}</span><input id="pr" type="number" value="${p?.price ?? ''}"></label>
         <label class="f"><span>Shtrix-kod</span><input id="b" value="${esc(p?.barcode || '')}"></label>
+        <label class="f" id="mswrap"><span>Minimal qoldiq (kam qolsa ogohlantiradi)</span><input id="ms" type="number" min="0" step="any" value="${p?.min_stock || ''}" placeholder="0 — kuzatilmaydi"></label>
         ${p ? `<label class="f"><span>Holat</span><select id="a"><option value="1">Faol</option><option value="0" ${p.active ? '' : 'selected'}>Arxiv</option></select></label>` : `<label class="f"><span>Boshlang'ich qoldiq</span><input id="st" type="number" value="0"></label>`}</div>
       </div></div>
     <datalist id="grades">${['0W-20', '0W-30', '5W-20', '5W-30', '5W-40', '10W-30', '10W-40', '15W-40', '20W-50'].map(x => `<option>${x}</option>`).join('')}</datalist>
@@ -952,6 +990,7 @@ function productForm(p) {
     $('#gwrap', m.el).hidden = !motor;
     $('#bwrap', m.el).hidden = !motor;
     $('#mwrap', m.el).hidden = c !== 'filtr';
+    $('#mswrap', m.el).hidden = c === 'xizmat';
   };
   const drawChips = () => {
     const names = [...new Set([...S.boot.car_models.map(x => x.name), ...sel])];
@@ -970,7 +1009,7 @@ function productForm(p) {
     const motor = cat === 'moy' && kind !== 'karobka';
     const b = { name: $('#n', m.el).value, category: cat, kind, unit: $('#u', m.el).value, barcode: $('#b', m.el).value, cost: $('#co', m.el).value, price: $('#pr', m.el).value,
       active: p ? +$('#a', m.el).value : 1, stock: p ? undefined : $('#st', m.el).value, models: cat === 'filtr' ? [...sel] : [],
-      grade: motor ? $('#gr', m.el).value : '', bonus_kinds: motor ? [...bonus] : [] };
+      grade: motor ? $('#gr', m.el).value : '', bonus_kinds: motor ? [...bonus] : [], min_stock: cat === 'xizmat' ? 0 : ($('#ms', m.el).value || 0) };
     if (image !== undefined) b.image = image;
     if (cat === 'filtr' && !kind) throw new Error("Filtr turini tanlang (moy / havo / salon / reduktor / yoqilg'i)");
     p ? await PUT('products/' + p.id, b) : await POST('products', b);
@@ -1033,7 +1072,7 @@ async function profitView(head, pb) {
   const sign = v => v < 0 ? 'neg' : 'pos';
   $('#app').innerHTML = head + `
     <div class="grid g4">${card('Tushum (naqd + karta)', h.revenue, '', `naqd ${fmt(h.cash)} · karta ${fmt(h.card)}`)}${card('Zakazlar', h.orders, '', `zamena ${h.zamena || 0} · sotuv ${h.sotuv || 0}`)}
-      ${card('Yalpi foyda', r.gross_profit, sign(r.gross_profit), 'tushum − tannarx')}${card('Sof foyda', r.net_profit, sign(r.net_profit), 'KPI, oylik va xarajatlardan keyin')}</div>
+      ${card('Yalpi foyda', r.gross_profit, sign(r.gross_profit), 'tushum − tannarx')}${card('Sof foyda', r.net_profit, sign(r.net_profit), 'KPI, oylik, xarajat va zararlardan keyin')}</div>
     <div class="grid g2">
     <div class="card"><h3>Foyda qayerdan keldi</h3><table><tbody>
       <tr><td>Moy foydasi</td><td class="num">${qtyFmt(cat('moy').qty)} L</td><td class="num ${sign(r.oil_profit)}"><b>${fmt(r.oil_profit)}</b></td></tr>
@@ -1045,6 +1084,8 @@ async function profitView(head, pb) {
       <tr><td>Usta / sotuvchi KPI</td><td></td><td class="num neg">−${fmt(r.kpi_total)}</td></tr>
       <tr><td>Oylik (asosiy maosh ulushi)</td><td></td><td class="num neg">−${fmt(r.salary_total)}</td></tr>
       <tr><td>Boshqa xarajatlar</td><td></td><td class="num neg">−${fmt(r.expenses)}</td></tr>
+      <tr><td>Hisobdan chiqarilgan (tannarx)</td><td></td><td class="num neg">−${fmt(r.writeoff_loss)}</td></tr>
+      <tr><td>Inventarizatsiya farqi (kamomad / ortiqcha)</td><td></td><td class="num ${sign(r.inventory_diff)}">${r.inventory_diff > 0 ? '+' : ''}${fmt(r.inventory_diff)}</td></tr>
       <tr><td><b>Sof foyda</b></td><td></td><td class="num ${sign(r.net_profit)}"><b>${fmt(r.net_profit)}</b></td></tr></tbody></table>
       <div class="sum-box small" style="margin-top:10px">Moy foydasi filtr zarari va bonuslarni qoplaydimi: <b class="${r.oil_profit + Math.min(r.filter_profit, 0) - r.bonus_cost >= 0 ? 'pos' : 'neg'}">${fmt(r.oil_profit + Math.min(r.filter_profit, 0) - r.bonus_cost)}</b> qoladi.<br>
       Berilgan keshbek: ${fmt(h.cashback_earned)} · Mijozlardagi jami keshbek (qarz): ${fmt(r.cashback_liability)}</div></div>
@@ -1126,6 +1167,7 @@ VIEWS.sozlama = async () => {
     <div class="card"><h2>Sozlamalar</h2>
       ${F.map(([k, l, t]) => `<label class="f"><span>${l}</span><input data-k="${k}" type="${t}" step="any" value="${esc(s[k])}"></label>`).join('')}
       <div class="row end"><button class="btn p" id="sv" type="button">Saqlash</button></div></div>
+    <div class="card" id="aiCard"></div>
     <div class="card"><h2>Mashina turlari</h2>
       <p class="small muted">Planshetda filtrlar shunga qarab chiqadi: ${Object.entries(GROUPS).map(([k, v]) => `<b>${v}</b> — ${(S.boot.group_filters[k] || []).map(x => FNAME[x].replace(' filtri', '')).join(', ')}`).join('; ')}.</p>
       <div class="row" style="margin-bottom:10px"><input id="nm" placeholder="Yangi model nomi" class="sp"><select id="ng" style="width:auto">${Object.entries(GROUPS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select><button class="btn" id="add" type="button">Qo'shish</button></div>
@@ -1136,6 +1178,322 @@ VIEWS.sozlama = async () => {
   });
   $$('[data-mid]').forEach(sl => sl.onchange = safe(async () => { await PUT('car_models/' + sl.dataset.mid, { grp: sl.value }); await reloadBoot(); toast('Saqlandi'); }));
   $('#add').onclick = safe(async () => { await POST('car_models', { name: $('#nm').value, grp: $('#ng').value }); await reloadBoot(); render(); });
+  aiSettingsCard($('#aiCard'));
 };
+
+// ================================================================== Admin (Bito uslubida): hisobdan chiqarish, Excel/CSV, qo'shimcha hisobotlar
+const isLow = p => p.active && p.category !== 'xizmat' && (p.stock <= 0 || (p.min_stock > 0 && p.stock <= p.min_stock));
+const ktile = (label, v, sub = '', cls = '') => `<div class="card stat"><div class="label">${label}</div><div class="big ${cls}">${v}</div>${sub ? `<div class="small muted">${sub}</div>` : ''}</div>`;
+// Shtrix-kod yoki nom yozib Enter — bitta topilsa qo'shadi, aks holda tanlash oynasi
+const scanAdd = (e, add) => {
+  if (e.key !== 'Enter') return;
+  const q = e.target.value.trim(); if (!q) return;
+  const byName = S.boot.products.filter(x => x.active && x.name.toLowerCase().includes(q.toLowerCase()));
+  const p = S.boot.products.find(x => x.barcode && x.barcode === q) || (byName.length === 1 ? byName[0] : null);
+  if (p) { add(p); e.target.value = ''; } else pickProduct(x => { add(x); e.target.value = ''; });
+};
+
+// ---- Hisobdan chiqarish (spisanie)
+VIEWS.hisobdan = async () => {
+  const pb = periodBar('woP', 'month');
+  const r = await GET('writeoffs?' + pb.q);
+  $('#app').innerHTML = `<div class="kpage"><div class="row khead"><h2 class="sp">Hisobdan chiqarish</h2><button class="btn p lg" id="new" type="button">${ic('plus', 'sm')} Hisobdan chiqarish</button></div>${pb.html}
+    <div class="grid g2" style="grid-template-columns:2fr 1fr;align-items:start">
+      <div class="card"><div class="tbl-wrap"><table><thead><tr><th>№</th><th>Sana</th><th>Sabab</th><th>Mahsulotlar</th><th>Kim</th><th class="num">Zarar (tannarx)</th></tr></thead><tbody>
+        ${r.rows.map(w => `<tr class="click" data-w="${w.id}"><td>#${w.id}</td><td class="small">${dateOf(w.created_at)} ${timeOf(w.created_at)}</td><td><span class="tag bekor">${esc(w.reason)}</span></td>
+          <td class="small">${esc(w.names || '')}${w.note ? `<div class="muted">${esc(w.note)}</div>` : ''}</td><td class="small">${esc(w.employee_name || '')}</td><td class="num neg"><b>${fmt(w.total_cost)}</b></td></tr>`).join('')
+          || '<tr><td colspan="6" class="empty">Bu davrda hisobdan chiqarilmagan</td></tr>'}</tbody></table></div></div>
+      <div class="card"><div class="row"><h3 class="sp">Sabablar bo'yicha</h3><b class="neg">${sum(r.total)}</b></div>${hbars(r.by_reason, x => `${esc(x.reason)} <small class="muted">${x.n}</small>`, x => x.total)}
+        <p class="small muted" style="margin-top:12px">Buzilgan, muddati o'tgan yoki do'kon o'zi ishlatgan mahsulotni shu yerda yozing — ombor qoldig'i to'g'ri turadi, tannarxi esa «Foyda» hisobotida sof foydadan ayriladi.</p></div></div></div>`;
+  pb.bind();
+  $('#new').onclick = () => go('hisobdan_new');
+  $$('[data-w]').forEach(tr => tr.onclick = safe(async () => {
+    const w = await GET('writeoffs/' + tr.dataset.w);
+    modal(`Hisobdan chiqarish #${w.id}`, `<p class="muted">${dateOf(w.created_at)} ${timeOf(w.created_at)} · ${esc(w.employee_name || '')} · <b>${esc(w.reason)}</b>${w.note ? ' · ' + esc(w.note) : ''}</p>
+      <div class="tbl-wrap"><table><thead><tr><th>Mahsulot</th><th class="num">Miqdor</th><th class="num">Tannarx</th><th class="num">Summa</th></tr></thead><tbody>
+      ${w.items.map(i => `<tr><td>${esc(i.name)}</td><td class="num">${qtyFmt(i.qty)} ${esc(i.unit || '')}</td><td class="num">${fmt(i.cost)}</td><td class="num">${fmt(i.qty * i.cost)}</td></tr>`).join('')}
+      <tr class="tot-row"><td colspan="3"><b>Jami</b></td><td class="num neg"><b>${fmt(w.total_cost)}</b></td></tr></tbody></table></div>`, { wide: true });
+  }));
+};
+
+VIEWS.hisobdan_new = async () => {
+  const f = S.ctx.wf || (S.ctx.wf = { reason: '', lines: [], note: '' });
+  S.ctx.form = true;
+  const reasons = S.boot.writeoff_reasons || [];
+  $('#app').innerHTML = `<div class="kpage"><div class="row khead"><button class="btn" id="back" type="button">${ic('back', 'sm')} Hisobdan chiqarish</button><h2 class="sp">Yangi hisobdan chiqarish</h2></div>
+    <div class="grid g2" style="grid-template-columns:2fr 1fr;align-items:start">
+      <div class="card"><div class="row" style="margin-bottom:10px"><div class="sbox sp">${ic('search')}<input id="bc" placeholder="Shtrix-kod yoki nom — Enter"></div><button class="btn p" id="addp" type="button">${ic('plus', 'sm')} Mahsulot</button></div>
+        <div class="tbl-wrap"><table><thead><tr><th>Mahsulot</th><th class="num">Omborda</th><th style="width:100px">Miqdor</th><th class="num">Tannarx</th><th class="num">Summa</th><th></th></tr></thead><tbody id="wl"></tbody></table></div></div>
+      <div class="card"><h3>Sabab</h3><div class="chips" id="rs">${reasons.map(x => `<button class="chip ${f.reason === x ? 'on' : ''}" data-r="${esc(x)}" type="button">${esc(x)}</button>`).join('')}</div>
+        <label class="f" style="margin-top:12px"><span>Izoh</span><input id="nt" value="${esc(f.note)}" placeholder="masalan: qutisi yorilgan"></label>
+        <div class="kv tot"><span>Zarar (tannarx)</span><b id="wt" class="neg">0</b></div>
+        <button class="btn bad xl" id="sv" type="button" style="width:100%;margin-top:10px">Hisobdan chiqarish</button></div></div></div>`;
+  const total = () => f.lines.reduce((a, l) => a + (+l.qty || 0) * (prod(l.product_id)?.cost || 0), 0);
+  let drawing = false;     // jadval qayta chizilayotganda fokusdagi maydonning blur/change hodisasi qayta chaqirmasin
+  const draw = () => { if (drawing) return; drawing = true; try { drawRows(); } finally { drawing = false; } };
+  const drawRows = () => {
+    $('#wl').innerHTML = f.lines.map((l, i) => {
+      const p = prod(l.product_id), over = p && +l.qty > p.stock;
+      return `<tr data-i="${i}"><td>${esc(p?.name || l.name)}</td><td class="num ${over ? 'neg' : ''}">${qtyFmt(p?.stock)} ${esc(p?.unit || '')}</td>
+        <td><input class="inl" data-q value="${qtyFmt(l.qty)}" inputmode="decimal"></td><td class="num">${fmt(p?.cost)}</td><td class="num">${fmt((+l.qty || 0) * (p?.cost || 0))}</td>
+        <td><button class="btn sm bad" data-del type="button">×</button></td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="empty">Hisobdan chiqariladigan mahsulotni qo\'shing</td></tr>';
+    $('#wt').textContent = sum(total());
+  };
+  const add = p => {
+    if (p.category === 'xizmat') return toast("Xizmatni hisobdan chiqarib bo'lmaydi", true);
+    const ex = f.lines.find(l => l.product_id === p.id);
+    if (ex) ex.qty = +ex.qty + 1; else f.lines.push({ product_id: p.id, name: p.name, qty: 1 });
+    draw();
+  };
+  $('#wl').onchange = e => { const tr = e.target.closest('tr[data-i]'); if (tr && e.target.matches('[data-q]')) { f.lines[tr.dataset.i].qty = parseFloat(e.target.value.replace(',', '.')) || 0; draw(); } };
+  $('#wl').onclick = e => { if (e.target.closest('[data-del]')) { f.lines.splice(e.target.closest('tr').dataset.i, 1); draw(); } };
+  $('#rs').onclick = e => { const b = e.target.closest('[data-r]'); if (!b) return; f.reason = b.dataset.r; $$('#rs .chip').forEach(c => c.classList.toggle('on', c === b)); };
+  $('#nt').oninput = e => { f.note = e.target.value; };
+  $('#addp').onclick = () => pickProduct(add);
+  $('#bc').onkeydown = e => scanAdd(e, add);
+  $('#back').onclick = () => { S.ctx.form = false; go('hisobdan'); };
+  $('#sv').onclick = safe(async () => {
+    if (!f.lines.length) throw new Error("Mahsulot qo'shing");
+    if (!f.reason) throw new Error('Sababni tanlang');
+    if (!await confirmBox(`${f.lines.length} xil mahsulot hisobdan chiqarilsinmi? Zarar: ${sum(total())}`)) return;
+    const w = await POST('writeoffs', { reason: f.reason, note: f.note, items: f.lines.map(l => ({ product_id: l.product_id, qty: l.qty })) });
+    S.ctx.wf = null; S.ctx.form = false; await reloadBoot();
+    toast(`#${w.id} hisobdan chiqarildi · ${fmt(w.total_cost)} so'm`); go('hisobdan');
+  });
+  draw();
+};
+
+// ---- Excel (CSV) eksport / import
+const CSV_COLS = [['name', 'Nomi'], ['category', 'Kategoriya'], ['kind', 'Turi'], ['grade', 'Yopishqoqlik'], ['unit', "O'lchov"], ['cost', 'Tannarx'],
+  ['price', 'Narx'], ['stock', 'Qoldiq'], ['min_stock', 'Min qoldiq'], ['barcode', 'Shtrix-kod']];
+const HDR_ALIASES = {
+  name: ['nomi', 'nom', 'name', 'mahsulot', 'наименование', 'название', 'товар'], category: ['kategoriya', 'category', 'категория', 'turkum'],
+  kind: ['turi', 'tur', 'kind', 'тип'], grade: ['yopishqoqlik', 'grade', 'marka', 'вязкость', 'sae'],
+  unit: ["o'lchov", 'olchov', 'unit', 'ед', 'ед.', 'ед.изм', 'единица', 'birlik'],
+  cost: ['tannarx', 'cost', 'kelish narxi', 'kelish', 'себестоимость', 'закупка', 'закупочная цена', 'цена закупки'],
+  price: ['narx', 'price', 'sotuv narxi', 'sotish narxi', 'цена', 'цена продажи'], stock: ['qoldiq', 'stock', 'miqdor', 'soni', 'остаток', 'количество'],
+  min_stock: ['min qoldiq', 'min_stock', 'minimal qoldiq', 'min', 'минимум', 'мин. остаток', 'мин остаток'],
+  barcode: ['shtrix-kod', 'shtrixkod', 'shtrix kod', 'barcode', 'штрихкод', 'штрих-код', 'sku', 'artikul', 'артикул'],
+};
+const csvCell = v => { const s = String(v ?? ''); return /[;"\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+const csvText = rows => rows.map(r => r.map(csvCell).join(';')).join('\r\n');
+function downloadFile(name, text) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + text], { type: 'text/csv;charset=utf-8' }));   // BOM — Excel UTF-8 ni to'g'ri ochadi
+  a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.parentNode.removeChild(a); }, 500);
+}
+function exportProducts() {
+  const dec = v => String(qtyFmt(v || 0)).replace('.', ',');
+  const rows = S.boot.products.map(p => CSV_COLS.map(([k]) => k === 'stock' || k === 'min_stock' ? dec(p[k]) : k === 'cost' || k === 'price' ? Math.round(p[k] || 0) : p[k] ?? ''));
+  downloadFile(`ombor-${today()}.csv`, csvText([CSV_COLS.map(c => c[1]), ...rows]));
+  toast(`${rows.length} ta mahsulot yuklab olindi`);
+}
+function parseCSV(text) {
+  text = text.replace(/^﻿/, '');
+  const first = text.split(/\r?\n/)[0] || '';
+  const d = [';', '\t', ','].map(c => [c, first.split(c).length]).sort((a, b) => b[1] - a[1])[0][0];
+  const out = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === d) { row.push(cell); cell = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cell); out.push(row); row = []; cell = ''; }
+    else cell += ch;
+  }
+  if (cell || row.length) { row.push(cell); out.push(row); }
+  return out.filter(r => r.some(c => c.trim()));
+}
+function importModal() {
+  const m = modal('Mahsulotlarni yuklash (Excel / CSV)', `<div class="sum-box small">
+      <b>Qanday qilinadi:</b> Excel'da jadvalni oching → «Файл → Сохранить как» → <b>CSV (разделители — точка с запятой)</b>. Birinchi qatorda ustun nomlari bo'lsin:
+      <i>Nomi, Kategoriya (moy / filtr / boshqa / xizmat), Turi, Yopishqoqlik, O'lchov, Tannarx, Narx, Qoldiq, Min qoldiq, Shtrix-kod</i> — faqat «Nomi» majburiy.<br>
+      Nomi yoki shtrix-kodi mos kelgan mahsulot <b>yangilanadi</b> (narx, tannarx…), qolganlari <b>yangi</b> qo'shiladi. Qoldiq faqat yangi mahsulotga yoziladi — bor mahsulot qoldig'i inventarizatsiya orqali to'g'rilanadi.</div>
+    <div class="row" style="margin:12px 0"><label class="btn p">${ic('upload', 'sm')} Faylni tanlash<input type="file" id="cf" accept=".csv,.txt,text/csv" hidden></label>
+      <button class="btn" id="tpl" type="button">${ic('download', 'sm')} Namuna fayl</button></div>
+    <div id="cw"></div>`, { wide: true });
+  $('#tpl', m.el).onclick = () => downloadFile('namuna-mahsulotlar.csv', csvText([CSV_COLS.map(c => c[1]),
+    ['Mobil Super 3000 5W-40', 'moy', 'motor', '5W-40', 'litr', '85000', '110000', '40', '8', ''],
+    ['Moy filtri — Gentra/Lacetti', 'filtr', 'moy', '', 'dona', '28000', '45000', '30', '5', '4601234567890']]));
+  $('#cf', m.el).onchange = safe(async e => {
+    const file = e.target.files[0]; if (!file) return;
+    e.target.value = '';
+    if (/\.xlsx?$/i.test(file.name)) throw new Error('Excel faylini avval CSV qilib saqlang (Файл → Сохранить как → CSV)');
+    const buf = await file.arrayBuffer();
+    let text; try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { text = new TextDecoder('windows-1251').decode(buf); }
+    const table = parseCSV(text);
+    if (table.length < 2) throw new Error("Faylda ma'lumot topilmadi");
+    const norm = s => s.trim().toLowerCase().replace(/[ʻʼ‘’`]/g, "'").replace(/\s+/g, ' ');
+    const map = table[0].map(h => Object.keys(HDR_ALIASES).find(k => HDR_ALIASES[k].includes(norm(h))) || null);
+    if (!map.includes('name')) throw new Error('Birinchi qatorda «Nomi» ustuni topilmadi');
+    const rows = table.slice(1).map(r => { const o = {}; map.forEach((k, i) => { if (k) o[k] = (r[i] || '').trim(); }); return o; });
+    const cols = CSV_COLS.filter(([k]) => map.includes(k));
+    const names = new Set(S.boot.products.map(p => p.name.trim().toLowerCase())), bcs = new Set(S.boot.products.map(p => p.barcode).filter(Boolean));
+    const isOld = o => (o.barcode && bcs.has(o.barcode)) || names.has(String(o.name || '').trim().toLowerCase());
+    const nOld = rows.filter(isOld).length, unknown = table[0].filter((h, i) => !map[i] && h.trim());
+    $('#cw', m.el).innerHTML = `<div class="small muted" style="margin-bottom:6px"><b>${rows.length}</b> qator: taxminan <b>${rows.length - nOld}</b> ta yangi, <b>${nOld}</b> ta yangilanadi.${unknown.length ? ` Tanilmagan ustunlar (o'tkazib yuboriladi): ${unknown.map(esc).join(', ')}` : ''}</div>
+      <div class="tbl-wrap" style="max-height:42vh"><table><thead><tr><th></th>${cols.map(c => `<th>${c[1]}</th>`).join('')}</tr></thead><tbody>
+      ${rows.slice(0, 200).map(o => `<tr><td>${!o.name ? '<span class="tag bekor">nomi yo\'q</span>' : isOld(o) ? '<span class="tag tayyor">yangilanadi</span>' : '<span class="tag jarayonda">yangi</span>'}</td>${cols.map(([k]) => `<td class="small">${esc(o[k] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      ${rows.length > 200 ? `<div class="small muted">… yana ${rows.length - 200} qator</div>` : ''}
+      <div class="row end" style="margin-top:10px"><button class="btn ok lg" id="go" type="button">Yuklash (${rows.length})</button></div>`;
+    $('#go', m.el).onclick = safe(async () => {
+      const r = await POST('products/import', { rows });
+      await reloadBoot();
+      $('#cw', m.el).innerHTML = `<div class="sum-box"><div class="kv"><span>Yangi qo'shildi</span><b class="pos">${r.created}</b></div><div class="kv"><span>Yangilandi</span><b>${r.updated}</b></div>
+        <div class="kv"><span>Xato qatorlar</span><b class="${r.error_count ? 'neg' : ''}">${r.error_count}</b></div>
+        ${r.errors.length ? `<ul class="small neg">${r.errors.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>
+        <div class="row end" style="margin-top:10px"><button class="btn p" id="dn" type="button">Tayyor</button></div>`;
+      $('#dn', m.el).onclick = () => { m.close(); render(); };
+    });
+  });
+}
+
+// ---- Hisobotlar: ombor, mijozlar, oylar (P&L)
+async function stockReport(head, pb) {
+  const r = await GET('reports/stock?' + pb.q), T = r.totals;
+  const tag = p => `<span class="tag ${p.category}">${CATS[p.category]}</span> ${esc(p.name)}`;
+  $('#app').innerHTML = head + `<div class="grid g4">${ktile('Ombor qiymati (tannarx)', fmt(T.cost_value), `${T.items} xil mahsulot`)}${ktile('Sotuv narxida', fmt(T.retail_value), `kutilayotgan ustama ${fmt(T.retail_value - T.cost_value)}`)}
+      ${ktile('Kam qolgan', T.low_count + ' ta', 'minimal qoldiqdan kam yoki tugagan', T.low_count ? 'neg' : '')}${ktile('Davrda sotilmagan', fmt(T.unsold_value), `${r.unsold.length} xil mahsulotda pul turibdi`, T.unsold_value ? 'neg' : '')}</div>
+    <div class="grid g2" style="align-items:start">
+      <div class="card"><div class="row"><h3 class="sp">Kam qolgan mahsulotlar</h3>${r.low.length ? `<button class="btn sm p" id="toBuy" type="button">${ic('cart', 'sm')} Xaridga qo'shish</button>` : ''}</div>
+        <div class="tbl-wrap"><table><thead><tr><th>Mahsulot</th><th class="num">Qoldiq</th><th class="num">Minimal</th><th>Oxirgi sotuv</th></tr></thead><tbody>
+        ${r.low.map(p => `<tr class="click" data-p="${p.id}"><td>${tag(p)}</td><td class="num neg"><b>${qtyFmt(p.stock)}</b> ${esc(p.unit)}</td><td class="num">${p.min_stock ? qtyFmt(p.min_stock) : '—'}</td><td class="small">${p.last_sale ? dateOf(p.last_sale) : '—'}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Hammasi yetarli ✓</td></tr>'}</tbody></table></div>
+        <p class="small muted">Minimal qoldiq Ombor → mahsulot kartasida belgilanadi.</p></div>
+      <div class="card"><h3>Kategoriyalar (tannarx bo'yicha qiymat)</h3>${hbars(r.by_category, c => CATS[c.cat] || c.cat, c => c.cost_value)}</div></div>
+    <div class="card"><h3>Davr ichida sotilmagan mahsulotlar <small class="muted">— pul turib qolgan</small></h3><div class="tbl-wrap"><table><thead><tr><th>Mahsulot</th><th class="num">Qoldiq</th><th class="num">Qiymati (tannarx)</th><th>Oxirgi sotuv</th></tr></thead><tbody>
+      ${r.unsold.map(p => `<tr class="click" data-p="${p.id}"><td>${tag(p)}</td><td class="num">${qtyFmt(p.stock)} ${esc(p.unit)}</td><td class="num"><b>${fmt(p.cost_value)}</b></td><td class="small">${p.last_sale ? dateOf(p.last_sale) : 'hech qachon'}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Hamma mahsulot sotilgan ✓</td></tr>'}</tbody></table></div></div>`;
+  $$('[data-p]').forEach(tr => tr.onclick = () => productForm(prod(tr.dataset.p)));
+  if ($('#toBuy')) $('#toBuy').onclick = () => {
+    // Bito'dagi «buyurtma» kabi: kam qolganlarni xarid oynasiga (minimalning 2 baravarigacha) solib beradi
+    const lines = r.low.map(p => ({ product_id: p.id, name: p.name, qty: Math.max(Math.ceil((p.min_stock || 1) * 2 - Math.max(p.stock, 0)), 1), cost: p.cost, price: p.price }));
+    go('xarid_new', { pf: { supplier_id: '', lines, discount: 0, note: "Kam qolganlar bo'yicha" } });
+  };
+}
+
+async function customersReport(head, pb) {
+  const r = await GET('reports/customers?' + pb.q), h = r.head;
+  $('#app').innerHTML = head + `<div class="grid g4">${ktile('Xarid qilgan mijozlar', h.customers)}${ktile('Yangi mijozlar', h.new, "shu davrda bazaga qo'shilgan")}
+      ${ktile('Anonim savdo', fmt(h.anon_revenue), 'mijoz tanlanmagan cheklar')}${ktile('Zamena vaqti kelgan', r.due.length + ' ta', "75 kundan beri kelmagan", r.due.length ? 'neg' : '')}</div>
+    <div class="card"><h3>Eng yaxshi mijozlar</h3><div class="tbl-wrap"><table><thead><tr><th>#</th><th>Mijoz</th><th class="num">Cheklar</th><th class="num">Xaridlar</th><th class="num">Foyda</th><th>Oxirgi tashrif</th><th class="num">Keshbek</th><th class="num">Qarz</th></tr></thead><tbody>
+      ${r.top.map((c, i) => `<tr class="click" data-c="${c.id}"><td>${i + 1}</td><td><b>${esc(c.name || 'Ismsiz')}</b><div class="small muted">${phoneShow(c.phone)} ${(c.plates || '').split(', ').filter(Boolean).map(plateFmt).join(', ')}</div></td>
+        <td class="num">${c.n}</td><td class="num"><b>${fmt(c.revenue)}</b></td><td class="num ${c.profit < 0 ? 'neg' : 'pos'}">${fmt(c.profit)}</td><td class="small">${dateOf(c.last_visit)}</td>
+        <td class="num">${fmt(c.cashback)}</td><td class="num ${c.debt > 0 ? 'neg' : ''}">${c.debt ? fmt(c.debt) : '—'}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">Bu davrda mijoz tanlangan savdo yo\'q</td></tr>'}</tbody></table></div></div>
+    <div class="card"><h3>Zamena vaqti kelgan mashinalar <small class="muted">— oxirgi almashtirishdan 75+ kun o'tgan, qo'ng'iroq qilib chaqiring</small></h3><div class="tbl-wrap"><table><thead><tr><th>Mashina</th><th>Mijoz</th><th>Oxirgi zamena</th><th class="num">O'tgan kun</th><th class="num">Probeg</th><th class="num">Tashriflar</th></tr></thead><tbody>
+      ${r.due.map(x => `<tr ${x.customer_id ? `class="click" data-c="${x.customer_id}"` : ''}><td><b>${plateFmt(x.plate)}</b> <span class="small muted">${esc(x.model || '')}</span></td><td>${esc(x.name || '—')}<div class="small muted">${phoneShow(x.phone)}</div></td>
+        <td class="small">${dateOf(x.last_change)}</td><td class="num ${x.days > 120 ? 'neg' : ''}"><b>${x.days}</b></td><td class="num">${fmt(x.last_mileage)}</td><td class="num">${x.visits}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Hozircha yo\'q</td></tr>'}</tbody></table></div></div>`;
+  $$('[data-c]').forEach(tr => tr.onclick = () => customerCard(+tr.dataset.c));
+}
+
+async function monthlyReport(head) {
+  const y0 = new Date().getFullYear(), year = S.ctx.ry || y0;
+  const r = await GET('reports/monthly?year=' + year), T = r.total;
+  const MN = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr'];
+  const mn = m => MN[+m.slice(5, 7) - 1];
+  const sign = v => v < 0 ? 'neg' : 'pos';
+  $('#app').innerHTML = head + `<div class="card row"><div class="chips" id="yr">${[y0 - 2, y0 - 1, y0].map(y => `<button class="chip ${y === year ? 'on' : ''}" data-y="${y}" type="button">${y}</button>`).join('')}</div><span class="sp"></span>
+      <span class="muted small">Sof foyda = tushum − tannarx − KPI − oylik − xarajat − hisobdan chiqarish ± inventar farqi</span></div>
+    <div class="grid g4">${ktile('Yillik tushum', fmt(T.revenue), `${T.orders} ta chek`)}${ktile('Yalpi foyda', fmt(T.gross), 'tushum − tannarx', sign(T.gross))}
+      ${ktile('Oylik, KPI va xarajatlar', fmt(T.kpi + T.salary + T.expenses), `zararlar ${fmt(T.writeoff - Math.min(T.inventory, 0))}`)}${ktile('Sof foyda', fmt(T.net), year + ' yil', sign(T.net))}</div>
+    <div class="card"><h3>Sof foyda oylar bo'yicha</h3>${barChart(r.months, { label: x => ['Yan', 'Fev', 'Mar', 'Apr', 'May', 'Iyn', 'Iyl', 'Avg', 'Sen', 'Okt', 'Noy', 'Dek'][+x.month.slice(5, 7) - 1], value: x => x.net })}</div>
+    <div class="card"><div class="tbl-wrap"><table><thead><tr><th>Oy</th><th class="num">Tushum</th><th class="num">Tannarx</th><th class="num">Yalpi foyda</th><th class="num">KPI</th><th class="num">Oylik</th><th class="num">Xarajat</th><th class="num">Hisobdan ch.</th><th class="num">Inventar</th><th class="num">Sof foyda</th></tr></thead><tbody>
+      ${[...r.months.map(x => [mn(x.month), x]), ['Jami', T]].map(([l, x]) => `<tr${l === 'Jami' ? ' class="tot-row"' : ''}><td><b>${l}</b></td><td class="num">${fmt(x.revenue)}</td><td class="num">${fmt(x.cost)}</td>
+        <td class="num ${sign(x.gross)}">${fmt(x.gross)}</td><td class="num">${fmt(x.kpi)}</td><td class="num">${fmt(x.salary)}</td><td class="num">${fmt(x.expenses)}</td><td class="num">${fmt(x.writeoff)}</td>
+        <td class="num ${x.inventory < 0 ? 'neg' : ''}">${fmt(x.inventory)}</td><td class="num ${sign(x.net)}"><b>${fmt(x.net)}</b></td></tr>`).join('')}</tbody></table></div></div>`;
+  $('#yr').onclick = e => { const b = e.target.closest('[data-y]'); if (b) { S.ctx.ry = +b.dataset.y; render(); } };
+  bindCharts();
+}
+
+// ================================================================== AI: rasmdan ro'yxatni tanib olish (Claude)
+// Kassada ro'yxat/nakladnoy rasmini olsangiz, Claude o'qiydi va mahsulotlarni katalogdan topadi; kassir ko'rib tasdiqlaydi.
+function aiOffText(st) {
+  if (st.demo) return "Bu imkoniyat do'kon serverida ishlaydi: Claude API kaliti xavfsizlik uchun faqat serverda saqlanadi, shuning uchun demo saytda o'chiq.";
+  if (st.has_key && !st.sdk) return "Serverda Claude kutubxonasi o'rnatilmagan — kompyuterda bir marta «pip install anthropic» ni bajaring.";
+  return 'Claude API kaliti hali kiritilmagan.';
+}
+const productOptions = sel => `<option value="0">— tanlang —</option>` + Object.entries(CATS).map(([c, cn]) => {
+  const ps = S.boot.products.filter(p => p.active && p.category === c);
+  return ps.length ? `<optgroup label="${cn}">${ps.map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</optgroup>` : '';
+}).join('');
+
+async function aiModal(kind, onApply) {
+  let st;
+  try { st = await GET('ai/status'); } catch (e) { st = { configured: false, error: e.message }; }
+  const title = kind === 'sotuv' ? "Ro'yxatni rasmdan kiritish" : 'Nakladnoyni rasmdan kiritish';
+  if (!st.configured) {
+    const m = modal(title, `<div class="ai-off"><div class="big2">📷 → 🤖 → 🧾</div><p>${esc(st.error || aiOffText(st))}</p>
+      ${isAdmin() && !st.demo ? `<button class="btn p" id="goS" type="button">Sozlamalarga o'tish</button>` : !st.demo ? `<p class="muted">Rahbarga ayting: Sozlamalar → Sun'iy intellekt.</p>` : ''}</div>`);
+    if ($('#goS', m.el)) $('#goS', m.el).onclick = () => { m.close(); go('sozlama'); };
+    return;
+  }
+  const m = modal(title, `<div class="ai-pick"><label class="btn p lg">📷 Rasmga olish yoki tanlash<input type="file" id="aif" accept="image/*" capture="environment" hidden></label>
+      <span class="muted small">${kind === 'sotuv' ? "Qo'lda yozilgan ro'yxat yoki chek" : 'Yetkazib beruvchining nakladnoyi yoki ro\'yxati'} — to'liq, tekis va yorug' joyda tushsin.</span></div>
+    <div id="aiw"></div>`, { wide: true });
+  const W = $('#aiw', m.el);
+  $('#aif', m.el).onchange = safe(async e => {
+    const f = e.target.files[0]; if (!f) return;
+    const img = await readImage(f, 1600);
+    W.innerHTML = `<div class="ai-res"><img src="${img}" class="ai-prev" alt="Yuborilgan rasm"><div class="sp"><div class="ai-wait"><span class="spin"></span> Claude o'qiyapti… odatda 10–30 soniya</div></div></div>`;
+    let r;
+    try { r = await POST('ai/extract', { kind, image: img }); }
+    catch (err) { W.innerHTML = `<div class="warn-box">${esc(err.message)}</div>`; return; }
+    draw(r, img);
+  });
+  const defPrice = (l, p) => l.price || (p ? (kind === 'sotuv' ? p.price : p.cost) : 0);
+  const draw = (r, img) => {
+    W.innerHTML = `<div class="ai-res"><img src="${img}" class="ai-prev" alt="Yuborilgan rasm"><div class="sp" style="min-width:0">
+      <div class="small muted" style="margin-bottom:6px">Topildi: <b>${r.matched}</b> / ${r.lines.length} qator${r.party_name ? ` · ${kind === 'sotuv' ? 'Mijoz' : 'Yetkazib beruvchi'}: <b>${esc(r.party_name)}</b>` : ''} · narxi ≈ $${r.cost_usd}</div>
+      ${r.notes ? `<div class="warn-box small">${esc(r.notes)}</div>` : ''}
+      <div class="tbl-wrap"><table class="ai-t"><thead><tr><th></th><th>Qog'ozda</th><th>Mahsulot</th><th style="width:80px">Miqdor</th><th style="width:120px">${kind === 'sotuv' ? 'Narx' : 'Kelish narxi'}</th></tr></thead><tbody>
+      ${r.lines.map((l, i) => `<tr data-i="${i}" class="${l.product_id ? '' : 'unm'}"><td><input type="checkbox" data-on ${l.product_id ? 'checked' : ''} style="width:20px;min-height:20px"></td>
+        <td class="small">${esc(l.raw_text)}</td><td><select data-p>${productOptions(l.product_id)}</select></td>
+        <td><input class="inl" data-q value="${qtyFmt(l.qty)}" inputmode="decimal"></td><td><input class="inl money" data-pr value="${fmt(defPrice(l, l.product))}"></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Rasmda ro\'yxat topilmadi</td></tr>'}
+      </tbody></table></div>
+      <div class="row" style="margin-top:10px"><span class="sp small" id="aitot"></span><button class="btn ok lg" id="aiok" type="button">${kind === 'sotuv' ? "Savatga qo'shish" : "Xaridga qo'shish"}</button></div></div></div>`;
+    const rowsEl = () => $$('tr[data-i]', W);
+    const tot = () => {
+      const s = rowsEl().filter(tr => $('[data-on]', tr).checked).reduce((a, tr) => a + Math.round((parseFloat($('[data-q]', tr).value.replace(',', '.')) || 0) * digits($('[data-pr]', tr).value)), 0);
+      $('#aitot', W).innerHTML = `Hisob: <b>${sum(s)}</b>` + (r.total ? ` · Qog'ozdagi jami: <b>${sum(r.total)}</b> ${Math.abs(s - r.total) <= 1000 ? '<span class="pos">✓</span>' : '<span class="neg">⚠ farq bor — tekshiring</span>'}` : '');
+    };
+    W.oninput = tot;
+    W.onchange = e => {
+      const tr = e.target.closest('tr[data-i]'); if (!tr) return;
+      if (e.target.matches('[data-p]')) {
+        const p = prod(+e.target.value);
+        $('[data-on]', tr).checked = !!p; tr.classList.toggle('unm', !p);
+        if (p && !digits($('[data-pr]', tr).value)) $('[data-pr]', tr).value = fmt(kind === 'sotuv' ? p.price : p.cost);
+      }
+      tot();
+    };
+    tot();
+    $('#aiok', W).onclick = () => {
+      const lines = rowsEl().filter(tr => $('[data-on]', tr).checked).map(tr => ({ product: prod(+$('[data-p]', tr).value), qty: parseFloat($('[data-q]', tr).value.replace(',', '.')) || 0, price: digits($('[data-pr]', tr).value) }))
+        .filter(x => x.product && x.qty > 0);
+      if (!lines.length) return toast('Hech bir qator tanlanmagan', true);
+      m.close(); onApply(lines, r);
+    };
+  };
+}
+
+// Sozlamalar → Sun'iy intellekt
+async function aiSettingsCard(el) {
+  let st;
+  try { st = await GET('ai/status'); } catch (e) { st = { error: e.message }; }
+  el.innerHTML = `<h2>Sun'iy intellekt (Claude)</h2>
+    <p class="muted">Kassada ro'yxat yoki nakladnoyning rasmini olsangiz, Claude uni o'qib, mahsulotlarni katalogdan topib kiritadi — kassir ko'rib bir bosishda tasdiqlaydi.</p>
+    <div class="kv"><span>Holat</span><b class="${st.configured ? 'pos' : 'neg'}">${st.error ? esc(st.error) : st.demo ? 'Demo — faqat serverda ishlaydi' : st.configured ? 'Ulangan ✓' : esc(aiOffText(st))}</b></div>
+    <div class="kv"><span>Model</span><b>${esc(st.model || '—')}</b></div>
+    ${st.demo || st.error ? '' : `<label class="f" style="margin-top:10px"><span>Claude API kaliti${st.has_key ? ' (kiritilgan — almashtirish uchun yangisini yozing)' : ''}</span><input id="aik" type="password" autocomplete="off" placeholder="sk-ant-..."></label>
+      <div class="row end">${st.has_key ? `<button class="btn bad" id="aidel" type="button">Kalitni o'chirish</button><button class="btn" id="aitest" type="button">Tekshirish</button>` : ''}<button class="btn p" id="aisv" type="button">Kalitni saqlash</button></div>`}
+    <p class="small muted">Kalitni console.anthropic.com saytida (API Keys bo'limi) olasiz va hisobni to'ldirasiz. Kalit faqat do'kon serverida saqlanadi, brauzerga va xodimlarga ko'rinmaydi. Bitta rasm taxminan 0,02–0,05 $ turadi.</p>`;
+  if (!$('#aisv', el)) return;
+  $('#aisv', el).onclick = safe(async () => {
+    const v = $('#aik', el).value.trim(); if (!v) throw new Error('Kalitni kiriting');
+    await PUT('settings', { ai_api_key: v }); toast('Kalit saqlandi'); aiSettingsCard(el);
+  });
+  if ($('#aidel', el)) $('#aidel', el).onclick = safe(async () => { if (await confirmBox("Claude API kaliti o'chirilsinmi?")) { await PUT('settings', { ai_api_key: '' }); toast("O'chirildi"); aiSettingsCard(el); } });
+  if ($('#aitest', el)) $('#aitest', el).onclick = safe(async () => { const r = await POST('ai/test'); toast(`Ulanish ishlayapti ✓ (${r.model})`); });
+}
 
 start();

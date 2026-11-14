@@ -33,13 +33,27 @@ Ma'lumotlar `data/zamena.db` faylida. Server har kuni **avtomatik zaxira nusxa**
 | Mijozlar | Ro'yxat, qarzdorlar filtri, yangi mijoz; kartochka: xaridlar, **qarzni to'lash**, keshbek va qarz tarixi |
 | Xaridlar | Yangi xarid: yetkazib beruvchi, mahsulotlar, kelish va sotuv narxi, chegirma, qisman to'lov → qolgani **qarzga** |
 | Yetkazib beruvchilar | Balans (qarzimiz), **pul berish / pul olish**, xaridlar va harakatlar tarixi |
-| Ombor / Inventarizatsiya | Mahsulotlar (moy rasmi, yopishqoqlik, bonus filtr, mos mashinalar), harakatlar, oylik inventarizatsiya |
+| Ombor / Inventarizatsiya | Mahsulotlar (moy rasmi, yopishqoqlik, bonus filtr, mos mashinalar, **minimal qoldiq**), ombor qiymati, **kam qolganlar**, harakatlar, oylik inventarizatsiya. Rahbarga: **Excel (CSV) eksport / import** |
+| Hisobdan chiqarish | Buzilgan, muddati o'tgan, do'kon ehtiyoji, yo'qolgan — sabab bilan; qoldiqdan ayriladi, zarari foydadan (faqat rahbar) |
 | Kassa | **Smena** ochish/yopish (Z-hisobot, sanalgan pul va farq), **kirim / chiqim (xarajat)** turlari bilan, harakatlar, smenalar tarixi |
-| Hisobotlar | Umumiy (kunlik tushum grafigi, to'lov usullari, kassirlar), mahsulotlar, qarzlar; rahbarga **Foyda** (moy/filtr/bonus, KPI, sof foyda) |
+| Hisobotlar | Umumiy (kunlik tushum grafigi, to'lov usullari, kassirlar), mahsulotlar, **ombor** (qiymat, kam qolgan, sotilmay turganlar → bir bosishda xaridga), qarzlar; rahbarga **Mijozlar** (eng yaxshi mijozlar, **zamena vaqti kelgan mashinalar** — qo'ng'iroq uchun), **Oylar (P&L)** va **Foyda** |
 | Oylik / KPI · Xodimlar · Sozlamalar | Faqat rahbar |
 
 Xarajat turlari Bito'dagidek: Ijara, Kommunal, Elektr, Gaz, Telefon, Reklama, Yo'lkira, Ish haqi, Avans, Usta puli, Inkassatsiya…
 Sotuv uchun smena ochiq bo'lishi shart.
+
+## Rasmdan kiritish (Claude sun'iy intellekti)
+POS'da **📷 Rasmdan** va Yangi xaridda **📷 Nakladnoydan** tugmasi: qo'lda yozilgan ro'yxat yoki nakladnoy rasmini oling —
+Claude uni o'qib, har qatorni ombordagi mahsulotga bog'laydi, miqdor va narxni qo'yadi. Kassir jadvalni ko'rib, kerak bo'lsa
+to'g'rilab, bitta tugma bilan savatga / xaridga qo'shadi (qog'ozdagi jami bilan solishtirib ko'rsatadi).
+
+Yoqish (bir marta, rahbar):
+1. https://console.anthropic.com → **API Keys** → kalit oling va hisobni to'ldiring (bitta rasm taxminan 0,02–0,05 $).
+2. Do'kon kompyuterida bir marta: `pip install anthropic` (yoki `ishga-tushirish.bat` o'zi o'rnatib qo'yadi).
+3. Kassa → **Sozlamalar → Sun'iy intellekt (Claude)** → kalitni kiriting → **Tekshirish**.
+
+Kalit faqat serverda saqlanadi — brauzerga, planshetga va xodimlarga hech qachon ko'rinmaydi. Shu sababli bu imkoniyat
+demo saytda o'chiq, faqat do'kon serverida ishlaydi. Model: Claude Opus 5.5 (band bo'lsa server o'zi zaxira modelga o'tadi).
 
 ## Planshet (zamena sotuvchisi)
 1. Asosiy ekran — **Jarayonda**; **＋ Yangi sotuv** → raqam (`01 A 123 BC` / `01 123 ABC`, chet el uchun **Istisno**).
@@ -50,14 +64,14 @@ Sotuv uchun smena ochiq bo'lishi shart.
 
 ## Rollar va xavfsizlik
 - Sotuvchi mijozlar ro'yxatini, telefonlarni, hisobotlarni ko'ra olmaydi — faqat raqami terilgan bitta mashina (bazani o'g'irlashdan himoya); raqam qidiruvi cheklangan.
-- Kassir foydani ko'rmaydi; hisobotlarda faqat savdo.
+- Kassir foydani ko'rmaydi; hisobotlarda faqat savdo va ombor. Hisobdan chiqarish, import/eksport, mijozlar hisoboti — faqat rahbar.
 - Parollar tuzli SHA-256; 5 marta noto'g'ri — 5 daqiqa kutish.
 
 ## Pul hisobi
 - **Bonus** (tekin) — narxi 0, tannarxi foydadan ayriladi. Moyga bog'langan bonus filtr avtomatik tekin bo'ladi.
 - **Keshbek** — to'langan (qarzga emas) summadan %. **Qarzga sotish** faqat tanlangan mijozga.
 - **Qaytarish** — mahsulot omborga qaytadi, pul tanlangan usulda (yoki mijoz qarzidan), keshbek ulushi qaytariladi.
-- **Sof foyda** = yalpi foyda − KPI − asosiy oylik − xarajatlar (ish haqi turlari oylikda alohida hisoblanadi).
+- **Sof foyda** = yalpi foyda − KPI − asosiy oylik − xarajatlar − hisobdan chiqarilgan ± inventarizatsiya farqi (ish haqi turlari oylikda alohida hisoblanadi).
 
 ## Fayllar
 ```

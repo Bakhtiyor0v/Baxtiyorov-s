@@ -20,7 +20,7 @@ import sqlite3
 import sys
 import threading
 import calendar
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -42,6 +42,7 @@ DEFAULT_SETTINGS = {
     "seller_kpi_percent": "0",
     "cashier_kpi_percent": "0",       # kassir: o'zi yopgan savdo foydasidan %
     "next_service_km": "8000",        # keyingi almashtirishgacha km
+    "ai_api_key": "",                 # Claude API kaliti — faqat serverda, brauzerga yuborilmaydi
 }
 
 # Mashina guruhi bo'yicha planshetda chiqadigan filtrlar
@@ -74,7 +75,7 @@ CREATE TABLE IF NOT EXISTS products(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
   unit TEXT DEFAULT 'dona', cost REAL DEFAULT 0, price INTEGER DEFAULT 0,
   stock REAL DEFAULT 0, barcode TEXT DEFAULT '', active INTEGER DEFAULT 1, kind TEXT DEFAULT '',
-  grade TEXT DEFAULT '', bonus_kinds TEXT DEFAULT '', image TEXT, image_v INTEGER DEFAULT 0);
+  grade TEXT DEFAULT '', bonus_kinds TEXT DEFAULT '', image TEXT, image_v INTEGER DEFAULT 0, min_stock REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS car_models(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, sort INTEGER DEFAULT 100,
   grp TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS product_models(product_id INTEGER NOT NULL, model TEXT NOT NULL, PRIMARY KEY(product_id, model));
@@ -123,6 +124,10 @@ CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY, supplier_id INTEGER
   discount INTEGER DEFAULT 0, paid INTEGER DEFAULT 0, note TEXT DEFAULT '', employee_id INTEGER, created_at TEXT);
 CREATE TABLE IF NOT EXISTS purchase_items(id INTEGER PRIMARY KEY, purchase_id INTEGER NOT NULL, product_id INTEGER,
   name TEXT, qty REAL, cost REAL, price INTEGER);
+CREATE TABLE IF NOT EXISTS writeoffs(id INTEGER PRIMARY KEY, reason TEXT NOT NULL, note TEXT DEFAULT '',
+  total_cost INTEGER DEFAULT 0, employee_id INTEGER, created_at TEXT);
+CREATE TABLE IF NOT EXISTS writeoff_items(id INTEGER PRIMARY KEY, writeoff_id INTEGER NOT NULL, product_id INTEGER,
+  name TEXT, qty REAL, cost REAL);
 CREATE INDEX IF NOT EXISTS ix_payments_order ON payments(order_id);
 CREATE INDEX IF NOT EXISTS ix_payments_shift ON payments(shift_id);
 CREATE INDEX IF NOT EXISTS ix_cash_created ON cash_tx(created_at);
@@ -255,7 +260,7 @@ def migrate():
                             ("customers", "debt", "INTEGER DEFAULT 0"), ("orders", "shift_id", "INTEGER"),
                             ("orders", "parent_id", "INTEGER"), ("orders", "paid_debt", "INTEGER DEFAULT 0"),
                             ("orders", "refunded", "INTEGER DEFAULT 0"), ("orders", "change_given", "INTEGER DEFAULT 0"),
-                            ("order_items", "src_item_id", "INTEGER")):
+                            ("order_items", "src_item_id", "INTEGER"), ("products", "min_stock", "REAL DEFAULT 0")):
         cols = {r[1] for r in CON.execute(f"PRAGMA table_info({table})")}
         if col not in cols:
             CON.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
@@ -345,7 +350,9 @@ def check_access(user, token, method, parts):
     if role == "kassir":
         if head not in KASSA_HEADS or (head == "car_models" and method != "GET"):
             raise deny
-        if head == "reports" and (len(parts) < 2 or parts[1] not in ("summary", "debts")):
+        if head == "reports" and (len(parts) < 2 or parts[1] not in ("summary", "debts", "stock")):
+            raise deny
+        if head == "products" and len(parts) > 1 and parts[1] == "import":
             raise deny
         return
     if role != "sotuvchi" or head not in SELLER_HEADS:
@@ -520,12 +527,14 @@ def api_product_save(b, pid=None):
             int(float(b.get("price") or 0)), (b.get("barcode") or "").strip(), 1 if b.get("active", 1) else 0,
             (b.get("kind") or "").strip(), norm_grade(b.get("grade")),
             ",".join(k for k in bonus if k in FILTER_KINDS))
+    ms = b.get("min_stock")
+    ms = None if ms in (None, "") else max(float(ms), 0)
     if pid:
         CON.execute("""UPDATE products SET name=?,category=?,unit=?,cost=?,price=?,barcode=?,active=?,kind=?,
-                       grade=?,bonus_kinds=? WHERE id=?""", vals + (pid,))
+                       grade=?,bonus_kinds=?,min_stock=COALESCE(?,min_stock) WHERE id=?""", vals + (ms, pid))
     else:
-        cur = CON.execute("""INSERT INTO products(name,category,unit,cost,price,barcode,active,kind,grade,bonus_kinds,stock)
-                             VALUES(?,?,?,?,?,?,?,?,?,?,0)""", vals)
+        cur = CON.execute("""INSERT INTO products(name,category,unit,cost,price,barcode,active,kind,grade,bonus_kinds,stock,min_stock)
+                             VALUES(?,?,?,?,?,?,?,?,?,?,0,?)""", vals + (ms or 0,))
         pid = cur.lastrowid
         if float(b.get("stock") or 0):
             move_stock(pid, float(b["stock"]), "prixod", "boshlang'ich", float(b.get("cost") or 0))
@@ -549,7 +558,7 @@ def norm_grade(g):
     return f"{m.group(1)}W-{m.group(2)}" if m else g
 
 
-PRODUCT_COLS = ("id,name,category,unit,cost,price,stock,barcode,active,kind,grade,bonus_kinds,image_v,"
+PRODUCT_COLS = ("id,name,category,unit,cost,price,stock,barcode,active,kind,grade,bonus_kinds,image_v,COALESCE(min_stock,0) min_stock,"
                 "(image IS NOT NULL AND image!='') AS has_img")
 
 
@@ -846,6 +855,9 @@ def api_report_profit(q):
     expenses = row(f"""SELECT COALESCE(SUM(amount),0) s FROM cash_tx WHERE kind='chiqim' AND date(created_at) BETWEEN ? AND ?
                         AND category IN ({','.join('?' * len(EXPENSE_CATS))})""", p + EXPENSE_CATS)["s"]
     gross = head["revenue"] - head["cost"]
+    writeoff = row("SELECT COALESCE(SUM(total_cost),0) s FROM writeoffs WHERE date(created_at) BETWEEN ? AND ?", p)["s"]
+    inv_diff = round(row("""SELECT COALESCE(SUM(qty*cost),0) s FROM stock_moves WHERE kind='inventar'
+                           AND date(created_at) BETWEEN ? AND ?""", p)["s"])
     oil = by_cat.get("moy", {}).get("profit", 0)
     filt = by_cat.get("filtr", {}).get("profit", 0)
     bonus = by_cat.get("bonus", {}).get("profit", 0)
@@ -855,9 +867,9 @@ def api_report_profit(q):
         "oil_profit": oil, "filter_profit": filt, "bonus_cost": -bonus,
         "other_profit": gross - oil - filt - bonus,
         "kpi_total": pay["kpi_total"], "salary_total": pay["salary_total"],
-        "expenses": expenses,
+        "expenses": expenses, "writeoff_loss": writeoff, "inventory_diff": inv_diff,
         "cashback_liability": row("SELECT COALESCE(SUM(cashback),0) s FROM customers")["s"],
-        "net_profit": gross - pay["kpi_total"] - pay["salary_total"] - expenses,
+        "net_profit": gross - pay["kpi_total"] - pay["salary_total"] - expenses - writeoff + inv_diff,
     }
 
 
@@ -1440,6 +1452,368 @@ def api_report_debts():
             "supplier_total": sum(s["debt"] for s in sup if s["debt"] > 0)}
 
 
+
+
+# ================================================================ ADMIN (Bito uslubida): hisobdan chiqarish, ombor va mijoz hisobotlari, import
+WRITEOFF_REASONS = ["Yaroqsiz / buzilgan", "Muddati o'tgan", "Do'kon ehtiyoji uchun", "Yo'qolgan", "Boshqa"]
+CAT_ALIASES = {"moy": "moy", "масло": "moy", "oil": "moy", "filtr": "filtr", "filter": "filtr", "фильтр": "filtr",
+               "boshqa": "boshqa", "другое": "boshqa", "xizmat": "xizmat", "услуга": "xizmat", "service": "xizmat"}
+
+
+def num_in(v, what):
+    """'45 000', '45000,5' -> son"""
+    s = re.sub(r"[\s ']", "", str(v if v is not None else "")).replace(",", ".")
+    if s == "":
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        raise ApiError(f"{what}: «{v}» son emas")
+
+
+def api_writeoff_create(b, user):
+    reason = b.get("reason") or ""
+    if reason not in WRITEOFF_REASONS:
+        raise ApiError("Hisobdan chiqarish sababini tanlang")
+    items = []
+    for it in b.get("items") or []:
+        p = row("SELECT * FROM products WHERE id=?", (int(it.get("product_id") or 0),))
+        qty = round(float(it.get("qty") or 0), 3)
+        if not p or p["category"] == "xizmat" or qty <= 0:
+            raise ApiError("Mahsulot yoki miqdor noto'g'ri")
+        if qty > (p["stock"] or 0) + 1e-9:
+            raise ApiError(f"{p['name']}: omborda {p['stock']:g} {p['unit']} bor, {qty:g} chiqarib bo'lmaydi")
+        items.append((p, qty))
+    if not items:
+        raise ApiError("Mahsulot qo'shing")
+    total = round(sum(p["cost"] * q for p, q in items))
+    cur = CON.execute("INSERT INTO writeoffs(reason,note,total_cost,employee_id,created_at) VALUES(?,?,?,?,?)",
+                      (reason, (b.get("note") or "").strip()[:300], total, user["id"], now()))
+    wid = cur.lastrowid
+    for p, q in items:
+        CON.execute("INSERT INTO writeoff_items(writeoff_id,product_id,name,qty,cost) VALUES(?,?,?,?,?)",
+                    (wid, p["id"], p["name"], q, p["cost"]))
+        move_stock(p["id"], -q, "hisobdan", f"hisobdan chiqarish #{wid}: {reason}", p["cost"])
+    return api_writeoff_get(wid)
+
+
+def api_writeoff_get(wid):
+    w = row("""SELECT w.*, e.name AS employee_name FROM writeoffs w LEFT JOIN employees e ON e.id=w.employee_id
+               WHERE w.id=?""", (wid,))
+    if not w:
+        raise ApiError("Topilmadi", 404)
+    w["items"] = rows("""SELECT wi.*, p.unit FROM writeoff_items wi LEFT JOIN products p ON p.id=wi.product_id
+                         WHERE writeoff_id=? ORDER BY wi.id""", (wid,))
+    return w
+
+
+def api_writeoffs(q):
+    frm, to = period_args(q)
+    p = (frm, to)
+    lst = rows("""SELECT w.*, e.name AS employee_name, (SELECT COUNT(*) FROM writeoff_items WHERE writeoff_id=w.id) n,
+                  (SELECT GROUP_CONCAT(name, ', ') FROM writeoff_items WHERE writeoff_id=w.id) names
+                  FROM writeoffs w LEFT JOIN employees e ON e.id=w.employee_id
+                  WHERE date(w.created_at) BETWEEN ? AND ? ORDER BY w.id DESC""", p)
+    by_reason = rows("""SELECT reason, COUNT(*) n, COALESCE(SUM(total_cost),0) total FROM writeoffs
+                        WHERE date(created_at) BETWEEN ? AND ? GROUP BY reason ORDER BY total DESC""", p)
+    return {"from": frm, "to": to, "rows": lst, "by_reason": by_reason, "total": sum(x["total"] for x in by_reason)}
+
+
+def api_report_stock(q):
+    """Ombor hisoboti: qiymati, kam qolganlar, davr ichida sotilmaganlar."""
+    frm, to = period_args(q)
+    ps = rows("""SELECT id, name, category, kind, unit, cost, price, stock, COALESCE(min_stock,0) min_stock
+                 FROM products WHERE active=1 AND category!='xizmat' ORDER BY category, name""")
+    sold = {r["product_id"]: r["qty"] for r in rows(
+        """SELECT i.product_id, SUM(i.qty) qty FROM order_items i JOIN orders o ON o.id=i.order_id
+           WHERE o.status='yopilgan' AND date(o.closed_at) BETWEEN ? AND ? GROUP BY i.product_id""", (frm, to))}
+    last = {r["product_id"]: r["d"] for r in rows(
+        """SELECT i.product_id, MAX(o.closed_at) d FROM order_items i JOIN orders o ON o.id=i.order_id
+           WHERE o.status='yopilgan' AND o.type!='qaytarish' GROUP BY i.product_id""")}
+    cats, low, unsold = {}, [], []
+    tot = {"items": 0, "cost_value": 0, "retail_value": 0}
+    for p in ps:
+        st = max(p["stock"] or 0, 0)
+        p["sold"] = round(sold.get(p["id"]) or 0, 2)
+        p["last_sale"] = last.get(p["id"])
+        p["cost_value"] = round(st * (p["cost"] or 0))
+        p["retail_value"] = round(st * (p["price"] or 0))
+        c = cats.setdefault(p["category"], {"cat": p["category"], "items": 0, "qty": 0, "cost_value": 0, "retail_value": 0})
+        c["items"] += 1
+        c["qty"] += st
+        c["cost_value"] += p["cost_value"]
+        c["retail_value"] += p["retail_value"]
+        tot["items"] += 1
+        tot["cost_value"] += p["cost_value"]
+        tot["retail_value"] += p["retail_value"]
+        if (p["stock"] or 0) <= 0 or (p["min_stock"] and p["stock"] <= p["min_stock"]):
+            low.append(p)
+        if st > 0 and p["sold"] <= 0:
+            unsold.append(p)
+    low.sort(key=lambda x: (x["stock"] > 0, x["stock"] - x["min_stock"]))
+    unsold.sort(key=lambda x: -x["cost_value"])
+    tot["low_count"] = len(low)
+    tot["unsold_value"] = sum(x["cost_value"] for x in unsold)
+    return {"from": frm, "to": to, "totals": tot, "by_category": list(cats.values()), "low": low, "unsold": unsold}
+
+
+def api_report_customers(q):
+    """Eng yaxshi mijozlar va zamena vaqti kelgan (uzoq kelmagan) mashinalar."""
+    frm, to = period_args(q)
+    p = (frm, to)
+    w = "o.status='yopilgan' AND date(o.closed_at) BETWEEN ? AND ?"
+    top = rows(f"""SELECT c.id, c.name, c.phone, c.cashback, COALESCE(c.debt,0) debt,
+        COUNT(CASE WHEN o.type!='qaytarish' THEN 1 END) n, COALESCE(SUM(o.total),0) revenue,
+        COALESCE(SUM(o.total-o.cost),0) profit, MAX(o.closed_at) last_visit,
+        (SELECT GROUP_CONCAT(plate, ', ') FROM cars WHERE customer_id=c.id) plates
+        FROM orders o JOIN customers c ON c.id=o.customer_id WHERE {w}
+        GROUP BY c.id ORDER BY revenue DESC LIMIT 100""", p)
+    head = row(f"""SELECT COUNT(DISTINCT o.customer_id) customers, COALESCE(SUM(CASE WHEN o.customer_id IS NULL THEN o.total END),0) anon_revenue,
+        COALESCE(SUM(o.total),0) revenue FROM orders o WHERE {w}""", p)
+    head["new"] = row("SELECT COUNT(*) n FROM customers WHERE date(created_at) BETWEEN ? AND ?", p)["n"]
+    # Oxirgi zamenasidan 75+ kun o'tgan mashinalar — qo'ng'iroq qilib chaqirish uchun
+    due = rows("""SELECT cars.id car_id, cars.plate, cars.model, cars.last_mileage, c.id customer_id, c.name, c.phone,
+        MAX(o.closed_at) last_change, CAST(julianday('now','localtime') - julianday(MAX(o.closed_at)) AS INTEGER) days,
+        COUNT(o.id) visits
+        FROM orders o JOIN cars ON cars.id=o.car_id LEFT JOIN customers c ON c.id=cars.customer_id
+        WHERE o.status='yopilgan' AND o.type='zamena' GROUP BY cars.id
+        HAVING days >= 75 AND days <= 400 ORDER BY days DESC LIMIT 200""")
+    return {"from": frm, "to": to, "head": head, "top": top, "due": due}
+
+
+def api_report_monthly(q):
+    """Oylar bo'yicha foyda-zarar (P&L) — yil kesimida."""
+    try:
+        year = int(q.get("year", [""])[0] or date.today().year)
+    except ValueError:
+        raise ApiError("Yil noto'g'ri")
+    last_m = date.today().month if year == date.today().year else 12
+    out = []
+    for m in range(1, last_m + 1):
+        f = date(year, m, 1).isoformat()
+        t = date(year, m, calendar.monthrange(year, m)[1]).isoformat()
+        r = api_report_profit({"from": [f], "to": [t]})
+        out.append({"month": f[:7], "revenue": r["head"]["revenue"], "cost": r["head"]["cost"], "orders": r["head"]["orders"],
+                    "gross": r["gross_profit"], "kpi": r["kpi_total"], "salary": r["salary_total"], "expenses": r["expenses"],
+                    "writeoff": r["writeoff_loss"], "inventory": r["inventory_diff"], "net": r["net_profit"]})
+    keys = ("revenue", "cost", "orders", "gross", "kpi", "salary", "expenses", "writeoff", "inventory", "net")
+    return {"year": year, "months": out, "total": {k: sum(x[k] for x in out) for k in keys}}
+
+
+def api_product_import(b):
+    """CSV/Excel'dan mahsulotlar: shtrix-kod yoki nomi bo'yicha mos kelsa yangilaydi, aks holda yangi qo'shadi.
+    Qoldiq faqat yangi mahsulotga boshlang'ich qoldiq sifatida yoziladi (bor mahsulotda — inventarizatsiya orqali)."""
+    data = b.get("rows") or []
+    if not isinstance(data, list) or not data:
+        raise ApiError("Fayl bo'sh")
+    if len(data) > 3000:
+        raise ApiError("Bir martada 3000 tadan ko'p qator yuklab bo'lmaydi")
+    by_bc, by_name = {}, {}
+    for p in rows("SELECT * FROM products"):
+        if p["barcode"]:
+            by_bc[p["barcode"]] = p
+        by_name[p["name"].strip().lower()] = p
+    created = updated = 0
+    errors = []
+    for i, r in enumerate(data, 1):
+        try:
+            name = str(r.get("name") or "").strip()
+            if not name:
+                raise ApiError("nomi yo'q")
+            bc = str(r.get("barcode") or "").strip()
+            ex = by_bc.get(bc) if bc else None
+            ex = ex or by_name.get(name.lower())
+            cat_raw = str(r.get("category") or "").strip().lower()
+            cat = CAT_ALIASES.get(cat_raw)
+            if cat_raw and not cat:
+                raise ApiError(f"kategoriya «{r.get('category')}» noma'lum (moy / filtr / boshqa / xizmat)")
+            cost, price = num_in(r.get("cost"), "Tannarx"), num_in(r.get("price"), "Narx")
+            mins, stock = num_in(r.get("min_stock"), "Min. qoldiq"), num_in(r.get("stock"), "Qoldiq")
+            if ex:
+                nb = {"name": name, "category": cat or ex["category"], "unit": (r.get("unit") or "").strip() or ex["unit"],
+                      "cost": ex["cost"] if cost is None else cost, "price": ex["price"] if price is None else price,
+                      "barcode": bc or ex["barcode"], "active": ex["active"], "kind": (r.get("kind") or "").strip() or ex["kind"],
+                      "grade": (r.get("grade") or "").strip() or ex["grade"], "bonus_kinds": ex["bonus_kinds"] or "",
+                      "min_stock": ex["min_stock"] if mins is None else mins}
+                api_product_save(nb, ex["id"])
+                updated += 1
+            else:
+                nb = {"name": name, "category": cat or "boshqa", "unit": (r.get("unit") or "").strip() or "dona",
+                      "cost": cost or 0, "price": price or 0, "barcode": bc, "kind": (r.get("kind") or "").strip(),
+                      "grade": (r.get("grade") or "").strip(), "min_stock": mins or 0, "stock": stock or 0}
+                np = api_product_save(nb)
+                by_name[name.lower()] = row("SELECT * FROM products WHERE id=?", (np["id"],))
+                if bc:
+                    by_bc[bc] = by_name[name.lower()]
+                created += 1
+        except ApiError as e:
+            errors.append(f"{i}-qator: {e}")
+    return {"created": created, "updated": updated, "errors": errors[:50], "error_count": len(errors)}
+
+
+# ================================================================ AI (Claude) — rasmdagi ro'yxatni tanib olish
+# Kalit faqat serverda (Sozlamalar → «Sun'iy intellekt» yoki ANTHROPIC_API_KEY). Brauzerga hech qachon yuborilmaydi.
+AI_MODEL = "claude-opus-5-5"
+AI_KINDS = ("sotuv", "xarid")
+AI_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "lines": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "raw_text": {"type": "string"},
+                    "product_id": {"type": "integer"},
+                    "qty": {"type": "number"},
+                    "price": {"type": "number"},
+                },
+                "required": ["raw_text", "product_id", "qty", "price"],
+                "additionalProperties": False,
+            },
+        },
+        "party_name": {"type": "string"},
+        "total": {"type": "number"},
+        "notes": {"type": "string"},
+    },
+    "required": ["lines", "party_name", "total", "notes"],
+    "additionalProperties": False,
+}
+
+
+def ai_system_prompt(kind, catalog):
+    what = ("a sales list: what customers bought in the shop" if kind == "sotuv"
+            else "a supplier's invoice or delivery note: what the shop bought from a supplier")
+    price = ("the unit selling price written on the list" if kind == "sotuv"
+             else "the unit purchase (cost) price written on the invoice")
+    party = "the customer's name or phone number" if kind == "sotuv" else "the supplier's name"
+    return f"""You read photos from a car oil-change shop in Uzbekistan and turn the item lines into structured data.
+The photo is {what}. It may be handwritten or printed, in Uzbek (Latin or Cyrillic) or Russian, with shop shorthand:
+"5w30"/"5w-30" = motor oil viscosity grade, "l", "л", "litr" = liters, "ta", "шт", "dona" = pieces,
+"filtr"/"фильтр" = filter, "havo"/"воздушный" = air filter, "salon"/"салон" = cabin filter, "moy"/"масло" = oil,
+"karobka"/"кор." = gearbox. Prices are in Uzbek so'm; "45", "45k" or "45 ming" next to an item usually means 45 000.
+
+For every item line on the paper return one entry:
+- raw_text: the line as written (write Cyrillic in Latin letters).
+- product_id: the id of the matching product from the catalog below, or 0 when nothing in the catalog clearly matches.
+  Match by meaning (brand, viscosity grade, filter type, car model), not by exact spelling. Never invent an id.
+- qty: the quantity (liters for oil sold by the liter, pieces otherwise); 1 when not written.
+- price: {price}, in so'm, or 0 when no price is written. When only a line total is written, divide it by qty.
+Skip headers, dates, signatures, totals and crossed-out lines.
+party_name: {party} if it is written, otherwise "".
+total: the grand total written on the paper in so'm, or 0.
+notes: one short sentence in Uzbek (Latin letters) about anything you could not read clearly, or "".
+
+Catalog (id | name | unit | price in so'm):
+{catalog}"""
+
+
+def ai_key():
+    return (settings().get("ai_api_key") or "").strip() or os.environ.get("ANTHROPIC_API_KEY", "")
+
+
+def ai_client(key):
+    try:
+        import anthropic
+    except ImportError:
+        raise ApiError("Claude kutubxonasi o'rnatilmagan. Kompyuterda bir marta «pip install anthropic» ni bajaring.", 503)
+    if not key:
+        raise ApiError("Claude API kaliti kiritilmagan (rahbar: Sozlamalar → Sun'iy intellekt).", 409)
+    return anthropic, anthropic.Anthropic(api_key=key, timeout=120.0, max_retries=2)
+
+
+def ai_call(fn):
+    """Claude chaqiruvidagi xatolarni tushunarli o'zbekcha xabarga aylantiradi."""
+    import anthropic
+    try:
+        return fn()
+    except anthropic.AuthenticationError:
+        raise ApiError("Claude API kaliti noto'g'ri yoki bekor qilingan.", 502)
+    except anthropic.PermissionDeniedError:
+        raise ApiError("Bu API kalitiga ruxsat yo'q (Anthropic Console'da tekshiring).", 502)
+    except anthropic.RateLimitError:
+        raise ApiError("Claude'ga juda ko'p so'rov ketdi — bir daqiqadan keyin qayta urinib ko'ring.", 429)
+    except anthropic.BadRequestError as e:
+        raise ApiError(f"Claude so'rovni qabul qilmadi: {e.message}", 502)
+    except anthropic.APIStatusError as e:
+        if getattr(e, "type", "") == "billing_error":
+            raise ApiError("Anthropic hisobida mablag' tugagan — Console'da balansni to'ldiring.", 502)
+        raise ApiError(f"Claude xatosi ({e.status_code}). Keyinroq urinib ko'ring.", 502)
+    except anthropic.APIConnectionError:
+        raise ApiError("Claude'ga ulanib bo'lmadi — internetni tekshiring.", 502)
+
+
+def ai_extract(key, kind, image, catalog):
+    m = re.match(r"data:(image/(jpeg|png|webp));base64,(.+)$", image or "", re.S)
+    if not m:
+        raise ApiError("Rasm JPG, PNG yoki WEBP bo'lishi kerak")
+    if len(image) > 7_000_000:
+        raise ApiError("Rasm juda katta (5 MB dan oshmasin)")
+    _, client = ai_client(key)
+
+    def run():
+        return client.beta.messages.create(
+            model=AI_MODEL,
+            max_tokens=16000,
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+            output_config={"effort": "medium", "format": {"type": "json_schema", "schema": AI_SCHEMA}},
+            system=[{"type": "text", "text": ai_system_prompt(kind, catalog), "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": m.group(1), "data": m.group(3)}},
+                {"type": "text", "text": "Rasmdagi ro'yxatni o'qib, har bir qatorni katalogdagi mahsulotga bog'lang."},
+            ]}],
+        )
+    resp = ai_call(run)
+    if resp.stop_reason == "refusal":
+        raise ApiError("Claude bu rasmni qayta ishlashni rad etdi.", 422)
+    if resp.stop_reason == "max_tokens":
+        raise ApiError("Ro'yxat juda uzun — rasmni ikki qismga bo'lib yuboring.", 422)
+    text = next((b.text for b in resp.content if b.type == "text"), "")
+    try:
+        data = json.loads(text)
+    except ValueError:
+        raise ApiError("Claude javobini o'qib bo'lmadi — qayta urinib ko'ring.", 502)
+    u = resp.usage
+    data["usage"] = {"input_tokens": getattr(u, "input_tokens", 0) or 0, "output_tokens": getattr(u, "output_tokens", 0) or 0,
+                     "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0}
+    return data
+
+
+def ai_catalog():
+    return "\n".join(f"{p['id']} | {p['name']} | {p['unit']} | {p['price']}"
+                     for p in rows("SELECT id, name, unit, price FROM products WHERE active=1 ORDER BY category, name"))
+
+
+def ai_finish(kind, data):
+    """Claude bergan id'larni bazadagi mahsulotlar bilan tekshiradi."""
+    prods = {p["id"]: p for p in rows("SELECT id, name, category, unit, price, cost, stock FROM products WHERE active=1")}
+    lines = []
+    for ln in data.get("lines") or []:
+        pid = int(ln.get("product_id") or 0)
+        p = prods.get(pid)
+        qty = float(ln.get("qty") or 0) or 1
+        lines.append({"raw_text": str(ln.get("raw_text") or "")[:200], "product_id": p["id"] if p else 0,
+                      "product": p, "qty": round(qty, 2), "price": max(int(round(float(ln.get("price") or 0))), 0)})
+    u = data.get("usage") or {}
+    cost_usd = (u.get("input_tokens", 0) * 4 + u.get("output_tokens", 0) * 20) / 1e6
+    return {"kind": kind, "lines": lines, "party_name": str(data.get("party_name") or "")[:120],
+            "total": max(int(round(float(data.get("total") or 0))), 0), "notes": str(data.get("notes") or "")[:300],
+            "matched": sum(1 for x in lines if x["product_id"]), "usage": u, "cost_usd": round(cost_usd, 4)}
+
+
+def ai_status(key):
+    import importlib.util
+    sdk = importlib.util.find_spec("anthropic") is not None
+    return {"configured": bool(key) and sdk, "has_key": bool(key), "sdk": sdk, "model": AI_MODEL}
+
+
+def ai_test(key):
+    _, client = ai_client(key)
+    m = ai_call(lambda: client.models.retrieve(AI_MODEL))
+    return {"ok": True, "model": getattr(m, "display_name", AI_MODEL)}
+
+
 # ---------------------------------------------------------------- employees/settings
 
 EMP_COLS = "id, name, role, phone, base_salary, active, COALESCE(login,'') AS login, (pass_hash IS NOT NULL) AS has_password"
@@ -1479,6 +1853,7 @@ def api_employee_save(b, eid=None):
 def public_settings():
     s = settings()
     s.pop("admin_pin", None)
+    s["ai_configured"] = bool((s.pop("ai_api_key", "") or "").strip() or os.environ.get("ANTHROPIC_API_KEY"))
     return s
 
 
@@ -1491,6 +1866,7 @@ def api_bootstrap(user):
         "group_filters": GROUP_FILTERS,
         "methods": METHODS,
         "cash_cats": {"kirim": KIRIM_CATS, "chiqim": CHIQIM_CATS},
+        "writeoff_reasons": WRITEOFF_REASONS,
         "shift": (shift_summary(current_shift()) if current_shift() else None) if user["role"] in ("kassir", "admin") else None,
         "me": user_public(user),
         "version": VERSION["v"],
@@ -1524,6 +1900,8 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         if not n:
             return {}
+        if n > 12_000_000:          # rasm (AI) va import uchun yetarli; undan kattasi — rad
+            raise ApiError("So'rov juda katta", 413)
         return json.loads(self.rfile.read(n) or b"{}")
 
     def do_GET(self):
@@ -1569,6 +1947,35 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def handle_ai(self, method, parts, b):
+        """Claude so'rovlari: tekshiruv qulf ichida, uzoq API chaqiruvi — qulfdan tashqarida."""
+        token = self.headers.get("X-Token", "")
+        sub = parts[1] if len(parts) > 1 else ""
+        with LOCK:
+            user = session_user(token)
+            if not user:
+                raise ApiError("Avval tizimga kiring", 401)
+            if user["role"] not in ("kassir", "admin"):
+                raise ApiError("Bu amal uchun huquq yo'q", 403)
+            key = ai_key()
+            if sub == "status":
+                return self.send_json(ai_status(key))
+            if sub == "test" and method == "POST" and user["role"] != "admin":
+                raise ApiError("Bu amal uchun huquq yo'q", 403)
+            kind = b.get("kind")
+            if sub == "extract" and method == "POST":
+                if kind not in AI_KINDS:
+                    raise ApiError("Ro'yxat turi noto'g'ri")
+                catalog = ai_catalog()
+        if sub == "test" and method == "POST":
+            return self.send_json(ai_test(key))
+        if sub == "extract" and method == "POST":
+            data = ai_extract(key, kind, b.get("image"), catalog)
+            with LOCK:
+                res = ai_finish(kind, data)
+            return self.send_json(res)
+        raise ApiError("Topilmadi", 404)
+
     def handle_any(self, method):
         u = urlparse(self.path)
         path = u.path.rstrip("/") or "/"
@@ -1583,6 +1990,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             b = self.body() if method in ("POST", "PUT") else {}
             parts = path.split("/")[2:]
+            if parts[0] == "ai":
+                return self.handle_ai(method, parts, b)
             with LOCK:
                 try:
                     if path == "/api/login" and method == "POST":
@@ -1676,6 +2085,8 @@ def route(method, path, q, b, user, token):
             return products_full()
         if method == "POST" and rid and action == "models":
             return api_product_add_model(rid, b)
+        if method == "POST" and len(parts) > 1 and parts[1] == "import":
+            return api_product_import(b)
         if method == "POST":
             return api_product_save(b)
         if method == "PUT" and rid:
@@ -1760,6 +2171,19 @@ def route(method, path, q, b, user, token):
             return api_report_summary(q, user)
         if sub == "debts":
             return api_report_debts()
+        if sub == "stock":
+            return api_report_stock(q)
+        if sub == "customers":
+            return api_report_customers(q)
+        if sub == "monthly":
+            return api_report_monthly(q)
+    if head == "writeoffs":
+        if method == "POST" and not rid:
+            return api_writeoff_create(b, user)
+        if method == "GET" and rid:
+            return api_writeoff_get(rid)
+        if method == "GET":
+            return api_writeoffs(q)
     if head == "salary":
         if method == "POST":
             return api_salary_pay(b, user)
